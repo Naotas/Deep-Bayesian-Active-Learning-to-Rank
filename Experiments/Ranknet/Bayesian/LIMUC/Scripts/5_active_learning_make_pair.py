@@ -1,9 +1,11 @@
-import os
 import argparse
+import os
 import random
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from data_paths import add_data_root_argument, generated_path
 
 # ============================================================
 # Select Active Learning samples and create cumulative pairs
@@ -33,18 +35,18 @@ import pandas as pd
 # the immediately preceding iteration.
 #
 # Input:
-# Results/
+# <data-root>/generated/Results/
 #   <result_date>/
 #     fold_<fold>/
 #       <datatype>_mean_score_and_uncertainty.csv
 #
-# Add_dataset/
+# <data-root>/generated/Add_dataset/
 #   LIMUC_AL_001/
 #     AL_<previous_iteration>/
 #       ...
 #
 # Output:
-# Add_dataset/
+# <data-root>/generated/Add_dataset/
 #   LIMUC_AL_001/
 #     AL_<iteration>/
 #       active_learning_summary_AL_<iteration>.csv
@@ -82,9 +84,7 @@ def read_pred(root_dir, datatype):
     required = {"filename", "label", "mean_score", "var_score"}
     missing = required - set(data.columns)
     if missing:
-        raise ValueError(
-            f"{datafile} is missing required columns: {sorted(missing)}"
-        )
+        raise ValueError(f"{datafile} is missing required columns: {sorted(missing)}")
 
     data = data[["filename", "label", "var_score", "mean_score"]].copy()
     data["filename"] = data["filename"].astype(str)
@@ -152,17 +152,13 @@ def load_previous_set(
         )
 
     if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Previous labeled image set not found: {path}"
-        )
+        raise FileNotFoundError(f"Previous labeled image set not found: {path}")
 
     data = pd.read_csv(path)
     required = {"filename", "MayoLabel"}
     missing = required - set(data.columns)
     if missing:
-        raise ValueError(
-            f"{path} is missing required columns: {sorted(missing)}"
-        )
+        raise ValueError(f"{path} is missing required columns: {sorted(missing)}")
 
     for col in ["var_score", "mean_score"]:
         if col not in data.columns:
@@ -171,11 +167,7 @@ def load_previous_set(
     data["filename"] = data["filename"].astype(str)
     data["MayoLabel"] = data["MayoLabel"].astype(float)
 
-    return (
-        data
-        .drop_duplicates("filename")
-        .reset_index(drop=True)
-    )
+    return data.drop_duplicates("filename").reset_index(drop=True)
 
 
 def select_samples(data, n, selection, seed):
@@ -186,8 +178,7 @@ def select_samples(data, n, selection, seed):
 
     if selection == "UBS":
         return (
-            data
-            .sort_values(
+            data.sort_values(
                 ["var_score", "filename"],
                 ascending=[False, True],
             )
@@ -197,24 +188,18 @@ def select_samples(data, n, selection, seed):
         )
 
     if selection == "RBS":
-        return (
-            data
-            .sample(
-                n=n,
-                replace=False,
-                random_state=seed,
-            )
-            .reset_index(drop=True)
-        )
+        return data.sample(
+            n=n,
+            replace=False,
+            random_state=seed,
+        ).reset_index(drop=True)
 
     raise ValueError(f"Unknown selection method: {selection}")
 
 
 def make_derangement(n, seed):
     if n < 2:
-        raise RuntimeError(
-            "At least two unique images are required to make pairs."
-        )
+        raise RuntimeError("At least two unique images are required to make pairs.")
 
     rng = random.Random(seed)
     idx = list(range(n))
@@ -227,11 +212,7 @@ def make_derangement(n, seed):
 
 
 def make_pairs(data, seed):
-    data = (
-        data
-        .drop_duplicates("filename")
-        .reset_index(drop=True)
-    )
+    data = data.drop_duplicates("filename").reset_index(drop=True)
 
     pair_idx = make_derangement(len(data), seed)
 
@@ -247,13 +228,15 @@ def make_pairs(data, seed):
     relative_label[diff == 0] = 0.5
     relative_label[diff < 0] = 0.0
 
-    pair_df = pd.DataFrame({
-        "x1_image": x1["filename"].to_numpy(),
-        "x2_image": x2["filename"].to_numpy(),
-        "x1_label": x1_label,
-        "x2_label": x2_label,
-        "relative_label": relative_label,
-    })
+    pair_df = pd.DataFrame(
+        {
+            "x1_image": x1["filename"].to_numpy(),
+            "x2_image": x2["filename"].to_numpy(),
+            "x1_label": x1_label,
+            "x2_label": x2_label,
+            "relative_label": relative_label,
+        }
+    )
 
     return pair_df
 
@@ -288,9 +271,7 @@ def process_one(
     )
 
     already_selected = set(previous_data["filename"].astype(str))
-    pool = pred_data[
-        ~pred_data["filename"].isin(already_selected)
-    ].copy()
+    pool = pred_data[~pred_data["filename"].isin(already_selected)].copy()
 
     select_number = round(len(pred_data) * select_rate)
     select_number = max(1, min(select_number, len(pool)))
@@ -330,9 +311,7 @@ def process_one(
 
     for path in [selected_csv, cumulative_csv, pair_csv]:
         if os.path.exists(path):
-            raise FileExistsError(
-                f"Output already exists: {path}"
-            )
+            raise FileExistsError(f"Output already exists: {path}")
 
     selected.to_csv(selected_csv, index=False)
 
@@ -341,11 +320,7 @@ def process_one(
         ignore_index=True,
         sort=False,
     )
-    cumulative = (
-        cumulative
-        .drop_duplicates("filename")
-        .reset_index(drop=True)
-    )
+    cumulative = cumulative.drop_duplicates("filename").reset_index(drop=True)
     cumulative.to_csv(cumulative_csv, index=False)
 
     pair_df = make_pairs(
@@ -354,15 +329,14 @@ def process_one(
     )
     pair_df.to_csv(pair_csv, index=False)
 
-    print("")
+    print()
     print(f"fold={fold} datatype={datatype} AL_{iteration}")
     print(f"  labeled before : {len(previous_data)}")
     print(f"  selected now   : {len(selected)}")
     print(f"  labeled after  : {len(cumulative)}")
     print(f"  pairs          : {len(pair_df)}")
     print(
-        f"  self pairs     : "
-        f"{int((pair_df['x1_image'] == pair_df['x2_image']).sum())}"
+        f"  self pairs     : {int((pair_df['x1_image'] == pair_df['x2_image']).sum())}"
     )
     print(f"  pair csv       : {pair_csv}")
 
@@ -391,6 +365,7 @@ def main():
             "RankNet pairs in one step."
         )
     )
+    add_data_root_argument(parser)
 
     parser.add_argument(
         "result_date",
@@ -430,11 +405,15 @@ def main():
     )
     parser.add_argument(
         "--results-root",
-        default="./../Results",
+        type=Path,
+        default=None,
+        help="Results directory. Default: <data-root>/generated/Results",
     )
     parser.add_argument(
         "--output-root",
-        default="./../Add_dataset",
+        type=Path,
+        default=None,
+        help="AL dataset directory. Default: <data-root>/generated/Add_dataset",
     )
 
     args = parser.parse_args()
@@ -444,16 +423,19 @@ def main():
     if not (0 < args.select_rate <= 1):
         raise ValueError("--select-rate must be > 0 and <= 1.")
 
-    folds = [
-        int(v.strip())
-        for v in args.folds.split(",")
-        if v.strip()
-    ]
-    datatypes = [
-        v.strip()
-        for v in args.datatype.split(",")
-        if v.strip()
-    ]
+    results_root = (
+        args.results_root.expanduser()
+        if args.results_root is not None
+        else generated_path(args.data_root, "Results")
+    )
+    output_root = (
+        args.output_root.expanduser()
+        if args.output_root is not None
+        else generated_path(args.data_root, "Add_dataset")
+    )
+
+    folds = [int(v.strip()) for v in args.folds.split(",") if v.strip()]
+    datatypes = [v.strip() for v in args.datatype.split(",") if v.strip()]
 
     allowed_datatypes = {"train", "valid"}
 
@@ -477,13 +459,13 @@ def main():
                     selection=args.selection,
                     select_rate=args.select_rate,
                     seed=args.seed,
-                    results_root=args.results_root,
-                    output_root=args.output_root,
+                    results_root=results_root,
+                    output_root=output_root,
                 )
             )
 
     summary_dir = os.path.join(
-        args.output_root,
+        output_root,
         args.al_id,
         f"AL_{args.iteration}",
     )
@@ -503,21 +485,28 @@ def main():
         index=False,
     )
 
-    pd.DataFrame([{
-        "al_id": args.al_id,
-        "iteration": args.iteration,
-        "result_date": args.result_date,
-        "selection": args.selection,
-        "select_rate": args.select_rate,
-        "folds": args.folds,
-        "datatype": args.datatype,
-        "seed": args.seed,
-    }]).to_csv(
+    pd.DataFrame(
+        [
+            {
+                "al_id": args.al_id,
+                "iteration": args.iteration,
+                "result_date": args.result_date,
+                "selection": args.selection,
+                "select_rate": args.select_rate,
+                "folds": args.folds,
+                "datatype": args.datatype,
+                "seed": args.seed,
+                "data_root": str(args.data_root),
+                "results_root": str(results_root),
+                "output_root": str(output_root),
+            }
+        ]
+    ).to_csv(
         condition_path,
         index=False,
     )
 
-    print("")
+    print()
     print("Finished.")
     print(f"Summary: {summary_path}")
 

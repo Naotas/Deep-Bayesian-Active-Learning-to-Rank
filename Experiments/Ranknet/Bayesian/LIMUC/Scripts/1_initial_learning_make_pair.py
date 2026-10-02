@@ -1,15 +1,18 @@
+import argparse
+import copy
 import os
 import random
-import copy
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from data_paths import add_data_root_argument, generated_path
 
 # ============================================================
 # Create the initial Active Learning dataset (AL_0)
 #
 # 1. Read the train / valid image lists from:
-#      Data/UC/LIMUC/Images/training_dataset/
+#      <data-root>/generated/training_dataset/
 #
 # 2. Randomly select 20% of images from each split.
 #
@@ -20,7 +23,7 @@ import pandas as pd
 #      - pair CSVs for RankNet training
 #
 # Output:
-# Add_dataset/
+# <data-root>/generated/Add_dataset/
 #   LIMUC_AL_001/
 #     AL_0/
 #       fold_<fold>/
@@ -66,9 +69,7 @@ def select_initial_images(data, foldnum, datatype):
     random_state = SEED + foldnum + split_offset
 
     selected = data.sample(
-        n=select_num,
-        replace=False,
-        random_state=random_state
+        n=select_num, replace=False, random_state=random_state
     ).copy()
 
     selected = selected.reset_index(drop=True)
@@ -111,27 +112,58 @@ def make_pair(selected, foldnum, datatype):
     return pair_df
 
 
-if __name__ == "__main__":
-    # path
-    # Same directory convention as the training / AL scripts:
-    #   input : ../../../../../../Data/UC/LIMUC/Images/training_dataset/
-    #   output: ../Add_dataset/
-    dataset_path = "./../../../../../Data/UC/LIMUC/Images/training_dataset/"
-    add_dataset_root = "./../Add_dataset/"
+def main():
+    parser = argparse.ArgumentParser(
+        description="Create the initial Active Learning image and pair datasets."
+    )
+    add_data_root_argument(parser)
+    parser.add_argument(
+        "--training-dataset-dir",
+        type=Path,
+        default=None,
+        help="Input directory. Default: <data-root>/generated/training_dataset",
+    )
+    parser.add_argument(
+        "--add-dataset-root",
+        type=Path,
+        default=None,
+        help="Output directory. Default: <data-root>/generated/Add_dataset",
+    )
+    parser.add_argument(
+        "--al-id",
+        default=AL_ID,
+        help=f"Active Learning experiment ID. Default: {AL_ID}",
+    )
+    parser.add_argument(
+        "--folds",
+        default="1,2,3,4,5",
+        help="Comma-separated folds. Default: 1,2,3,4,5",
+    )
+    args = parser.parse_args()
 
-    for foldnum in [1, 2, 3, 4, 5]:
-        print("")
+    dataset_path = (
+        args.training_dataset_dir.expanduser()
+        if args.training_dataset_dir is not None
+        else generated_path(args.data_root, "training_dataset")
+    )
+    add_dataset_root = (
+        args.add_dataset_root.expanduser()
+        if args.add_dataset_root is not None
+        else generated_path(args.data_root, "Add_dataset")
+    )
+    folds = [int(value.strip()) for value in args.folds.split(",") if value.strip()]
+
+    for foldnum in folds:
+        print()
         print(f"fold {foldnum}")
 
         for datatype in ["train", "valid"]:
             print(datatype)
 
-            input_csv = dataset_path + f"{foldnum}_{datatype}.csv"
+            input_csv = dataset_path / f"{foldnum}_{datatype}.csv"
 
             if not os.path.exists(input_csv):
-                raise FileNotFoundError(
-                    f"Training dataset CSV not found: {input_csv}"
-                )
+                raise FileNotFoundError(f"Training dataset CSV not found: {input_csv}")
 
             data = pd.read_csv(input_csv)
 
@@ -143,56 +175,39 @@ if __name__ == "__main__":
                 )
 
             selected = select_initial_images(
-                data=data,
-                foldnum=foldnum,
-                datatype=datatype
+                data=data, foldnum=foldnum, datatype=datatype
             )
 
-            pair_df = make_pair(
-                selected=selected,
-                foldnum=foldnum,
-                datatype=datatype
-            )
+            pair_df = make_pair(selected=selected, foldnum=foldnum, datatype=datatype)
 
             output_dir = os.path.join(
-                add_dataset_root,
-                AL_ID,
-                "AL_0",
-                f"fold_{foldnum}",
-                SELECTION
+                add_dataset_root, args.al_id, "AL_0", f"fold_{foldnum}", SELECTION
             )
             os.makedirs(output_dir, exist_ok=True)
 
             selected_csv = os.path.join(
-                output_dir,
-                f"{foldnum}_{datatype}_{SELECTION}.csv"
+                output_dir, f"{foldnum}_{datatype}_{SELECTION}.csv"
             )
 
             pair_csv = os.path.join(
-                output_dir,
-                f"{foldnum}_{datatype}_pair_{SELECTION}.csv"
+                output_dir, f"{foldnum}_{datatype}_pair_{SELECTION}.csv"
             )
 
             selected.to_csv(selected_csv, index=False)
             pair_df.to_csv(pair_csv, index=False)
 
+            print(f"  full images     : {len(data)}")
             print(
-                f"  full images     : {len(data)}"
+                f"  selected AL_0   : {len(selected)} ({len(selected) / len(data):.3f})"
             )
-            print(
-                f"  selected AL_0   : {len(selected)} "
-                f"({len(selected) / len(data):.3f})"
-            )
-            print(
-                f"  pairs           : {len(pair_df)}"
-            )
+            print(f"  pairs           : {len(pair_df)}")
             print(
                 f"  self pairs      : "
                 f"{int((pair_df['x1_image'] == pair_df['x2_image']).sum())}"
             )
-            print(
-                f"  selected csv    : {selected_csv}"
-            )
-            print(
-                f"  pair csv        : {pair_csv}"
-            )
+            print(f"  selected csv    : {selected_csv}")
+            print(f"  pair csv        : {pair_csv}")
+
+
+if __name__ == "__main__":
+    main()

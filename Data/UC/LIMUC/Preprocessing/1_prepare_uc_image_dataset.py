@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 Collect and preprocess ulcerative colitis endoscopy images.
 
@@ -10,13 +8,15 @@ This script:
 4. Saves image metadata, patient IDs, and Mayo labels as a CSV file.
 """
 
+import argparse
 import os
 import shutil
 from collections import Counter
+from pathlib import Path
 
 import cv2
 import pandas as pd
-
+from data_paths import GENERATED_DIRECTORY, add_data_root_argument, generated_path
 
 CLASS_NAMES = ["Mayo 0", "Mayo 1", "Mayo 2", "Mayo 3"]
 LABEL_MAP = {
@@ -27,14 +27,24 @@ LABEL_MAP = {
 }
 
 
-def collect_image_records(patient_root):
-    """Collect image metadata from patient- and Mayo-class-based directories."""
+def collect_image_records(patient_root, excluded_directories=None):
+    """Collect image metadata from patient- and Mayo-class-based directories.
+
+    Args:
+        patient_root (Path): Directory containing the patient directories.
+        excluded_directories (set[str] | None): Directory names to ignore.
+
+    Returns:
+        list[dict[str, str]]: Source paths and metadata for BMP images.
+    """
     records = []
+    excluded_directories = set(excluded_directories or [])
 
     patient_list = sorted(
         patient
         for patient in os.listdir(patient_root)
-        if os.path.isdir(os.path.join(patient_root, patient))
+        if patient not in excluded_directories
+        and os.path.isdir(os.path.join(patient_root, patient))
     )
 
     for patient in patient_list:
@@ -107,7 +117,7 @@ def save_images(records, original_output_dir, jpg_output_dir):
             [cv2.IMWRITE_JPEG_QUALITY, 100],
         )
         if not success:
-            raise IOError(f"Failed to save JPEG image: {jpg_output_path}")
+            raise OSError(f"Failed to save JPEG image: {jpg_output_path}")
 
 
 def save_metadata(records, csv_path):
@@ -124,19 +134,36 @@ def save_metadata(records, csv_path):
 
 
 def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    root_dir = os.path.dirname(script_dir)
-    image_dir = os.path.join(root_dir, "Images")
+    parser = argparse.ArgumentParser(
+        description="Collect and preprocess the LIMUC image dataset."
+    )
+    add_data_root_argument(parser)
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=None,
+        help="Generated-data directory. Default: <data-root>/generated",
+    )
+    args = parser.parse_args()
 
-    patient_root = os.path.join(image_dir, "patient_based_classified_images")
-    original_output_dir = os.path.join(image_dir, "all_public_UC_images_original_bmp")
-    jpg_output_dir = os.path.join(image_dir, "all_public_UC_images")
-    csv_path = os.path.join(image_dir, "all_public_UC_data.csv")
+    patient_root = args.data_root.expanduser()
+    output_root = (
+        args.output_root.expanduser()
+        if args.output_root is not None
+        else generated_path(patient_root)
+    )
+    original_output_dir = output_root / "all_public_UC_images_original_bmp"
+    jpg_output_dir = output_root / "all_public_UC_images"
+    csv_path = output_root / "all_public_UC_data.csv"
 
     if not os.path.isdir(patient_root):
         raise FileNotFoundError(f"Patient image directory not found: {patient_root}")
 
-    records = collect_image_records(patient_root)
+    excluded_directories = {GENERATED_DIRECTORY}
+    if output_root.parent == patient_root:
+        excluded_directories.add(output_root.name)
+
+    records = collect_image_records(patient_root, excluded_directories)
     records, duplicate_names = remove_duplicate_filenames(records)
 
     if duplicate_names:

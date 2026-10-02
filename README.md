@@ -14,7 +14,12 @@ This repository uses the public **LIMUC (Labeled Images for Ulcerative Colitis) 
 
 https://doi.org/10.5281/zenodo.5827695
 
-Please use the `patient_based_classified_images` directory included in the LIMUC dataset.
+Use the patient-classified image directory included in the LIMUC dataset. On the
+laboratory server, its path is:
+
+```text
+/data/umeiro0/patient_based_classified_images
+```
 
 The dataset itself is not included in this repository.
 
@@ -71,7 +76,8 @@ Deep-Bayesian-Active-Learning-to-Rank/
                     └── scatter_plot.py
 ```
 
-Dataset directories, active-learning datasets (`Add_dataset/`), and experiment results (`Results/`) are generated during preprocessing and experiment execution.
+Dataset files, active-learning datasets, and experiment results are stored on the
+data server rather than in this repository.
 
 ## Usage
 
@@ -81,13 +87,39 @@ Download the LIMUC dataset from:
 
 https://doi.org/10.5281/zenodo.5827695
 
-Use the `patient_based_classified_images` directory and place it at:
+The data root must directly contain the patient directories, each of which contains
+the `Mayo 0` through `Mayo 3` directories. The laboratory server already provides
+this directory at:
 
 ```text
-Data/UC/LIMUC/Images/patient_based_classified_images/
+/data/umeiro0/patient_based_classified_images/
 ```
 
-The preprocessing scripts below create the directory structure required for the experiments.
+All scripts accept `--data-root`. They also read `LIMUC_DATA_ROOT`, and finally
+fall back to the laboratory path above. Set the environment variable once before
+running the pipeline:
+
+```bash
+export LIMUC_DATA_ROOT=/data/umeiro0/patient_based_classified_images
+```
+
+Generated files are kept below `$LIMUC_DATA_ROOT/generated/`:
+
+```text
+generated/
+├── all_public_UC_images_original_bmp/
+├── all_public_UC_images/
+├── all_public_UC_data.csv
+├── original_splits/
+├── dataset/
+├── training_dataset/
+├── Add_dataset/
+└── Results/
+```
+
+This keeps both source and generated data outside the project checkout. You can
+override an individual input or output with the more specific options shown by
+`--help`.
 
 ### 2. Build the Docker image
 
@@ -107,7 +139,10 @@ From the project root, run:
 bash run_docker.sh
 ```
 
-The project directory is mounted to `/workdir` inside the container.
+The project directory is mounted to `/workdir`. `run_docker.sh` also mounts
+`$LIMUC_DATA_ROOT` at the same absolute path inside the container and passes the
+environment variable through. Set `LIMUC_DATA_ROOT` before starting the container
+when using a different data-server path.
 
 ### 4. Prepare the dataset
 
@@ -124,6 +159,14 @@ python 1_prepare_uc_image_dataset.py
 python 2_create_patient_level_splits.py
 python 3_format_fold_datasets.py
 python 4_create_training_only_datasets.py
+```
+
+To specify the root without an environment variable, pass the same option to every
+command, for example:
+
+```bash
+python 1_prepare_uc_image_dataset.py \
+    --data-root /data/umeiro0/patient_based_classified_images
 ```
 
 ### 5. Run Bayesian active learning-to-rank
@@ -159,6 +202,11 @@ Here, `<AL_0_result_date>` refers to the result directory from the initial train
 For later iterations, replace `<AL_1_result_date>` with the result directory from the immediately preceding iteration and increment `--iteration` accordingly.
 
 Continue this cycle until the desired active-learning iteration is reached.
+
+Every script in steps 1–6 accepts the same `--data-root` option. When
+`LIMUC_DATA_ROOT` is exported, the commands above automatically read preprocessed
+data, Active Learning CSV files, and results from the shared `generated/`
+directory. No current-working-directory-dependent data path is used.
 
 In the experiments reported in the paper, the number of active-learning iterations was set to `K = 6`.
 

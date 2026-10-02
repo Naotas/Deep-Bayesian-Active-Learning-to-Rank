@@ -4,21 +4,22 @@ import math
 import os
 import random
 from datetime import datetime
+from pathlib import Path
 
 import cv2
 import keras
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from bayesian_densenet import DenseNet169
+from callbacks import makecallbacks
+from data_paths import add_data_root_argument, generated_path
 from keras import backend as K
-from keras.layers import Input
 from keras import regularizers
+from keras.layers import Input
 from keras.layers.core import Dense, Dropout
 from keras.models import Model
 from keras.optimizers import Adam
-
-from bayesian_densenet import DenseNet169
-from callbacks import makecallbacks
 
 # ============================================================
 # Bayesian RankNet training for cumulative Active Learning
@@ -46,6 +47,7 @@ from callbacks import makecallbacks
 #       --initial-result-date 20260825_161805_AL_0
 # ============================================================
 
+
 class BatchGenerator(keras.utils.Sequence):
     def __init__(
         self,
@@ -67,9 +69,7 @@ class BatchGenerator(keras.utils.Sequence):
         self.shuffle = shuffle
 
     def __getitem__(self, index):
-        indexes = self.indexes[
-            index * self.batch_size:(index + 1) * self.batch_size
-        ]
+        indexes = self.indexes[index * self.batch_size : (index + 1) * self.batch_size]
 
         x1_batch = []
         x2_batch = []
@@ -80,13 +80,9 @@ class BatchGenerator(keras.utils.Sequence):
             x2_img = cv2.imread(self.x2[i], cv2.IMREAD_COLOR)
 
             if x1_img is None:
-                raise FileNotFoundError(
-                    f"Could not read x1 image: {self.x1[i]}"
-                )
+                raise FileNotFoundError(f"Could not read x1 image: {self.x1[i]}")
             if x2_img is None:
-                raise FileNotFoundError(
-                    f"Could not read x2 image: {self.x2[i]}"
-                )
+                raise FileNotFoundError(f"Could not read x2 image: {self.x2[i]}")
 
             x1_img = cv2.resize(
                 x1_img,
@@ -156,18 +152,14 @@ def get_pair_csv(datatype):
 
 def read_pair_csv(csv_path):
     if not os.path.exists(csv_path):
-        raise FileNotFoundError(
-            f"Pair CSV not found: {csv_path}"
-        )
+        raise FileNotFoundError(f"Pair CSV not found: {csv_path}")
 
     data = pd.read_csv(csv_path)
 
     required = {"x1_image", "x2_image", "relative_label"}
     missing = required - set(data.columns)
     if missing:
-        raise ValueError(
-            f"{csv_path} is missing columns: {sorted(missing)}"
-        )
+        raise ValueError(f"{csv_path} is missing columns: {sorted(missing)}")
 
     x1 = data["x1_image"].astype(str).to_numpy()
     x2 = data["x2_image"].astype(str).to_numpy()
@@ -204,11 +196,7 @@ def prepare_dataset():
 def pairwise_loss(x1_score, x2_score, rel_label, sigma=1):
     return K.mean(
         (1 - rel_label) * sigma * (x1_score - x2_score)
-        + K.log(
-            1 + K.exp(
-                -sigma * (x1_score - x2_score)
-            )
-        )
+        + K.log(1 + K.exp(-sigma * (x1_score - x2_score)))
     )
 
 
@@ -308,18 +296,15 @@ def find_al0_initial_weight():
     ]
 
     if not weight_files:
-        raise FileNotFoundError(
-            f"No AL_0 .h5 weights found in: {weight_dir}"
-        )
+        raise FileNotFoundError(f"No AL_0 .h5 weights found in: {weight_dir}")
 
     weight_files.sort()
     best_path = weight_files[-1]
 
-    print(
-        f"  AL_0 initialization weight : {best_path}"
-    )
+    print(f"  AL_0 initialization weight : {best_path}")
 
     return best_path
+
 
 def set_callbacks():
     os.makedirs(
@@ -361,11 +346,13 @@ def save_condition(
         "method": method_type,
         "backbone": backbone_type,
         "dataset": dataset_name,
+        "data_root": str(args.data_root),
+        "image_dir": str(image_path),
+        "add_dataset_root": str(add_dataset_root),
+        "results_root": str(results_root),
         "al_id": al_id,
         "iteration": iteration,
-        "selection": (
-            "RBS" if iteration == 0 else selection
-        ),
+        "selection": ("RBS" if iteration == 0 else selection),
         "initial_rate": 0.20,
         "add_rate_per_iteration": 0.05,
         "initial_result_date": initial_result_date,
@@ -459,10 +446,10 @@ def learning():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Train Bayesian RankNet with cumulative Active Learning "
-            "(AL_0 to AL_6)."
+            "Train Bayesian RankNet with cumulative Active Learning (AL_0 to AL_6)."
         )
     )
+    add_data_root_argument(parser)
 
     parser.add_argument(
         "--al-id",
@@ -477,10 +464,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--initial-result-date",
         default=None,
-        help=(
-            "Fixed AL_0 training result directory. "
-            "Required for iteration >= 1."
-        ),
+        help=("Fixed AL_0 training result directory. Required for iteration >= 1."),
     )
     parser.add_argument(
         "--selection",
@@ -494,11 +478,21 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--add-dataset-root",
-        default="./../Add_dataset",
+        type=Path,
+        default=None,
+        help="AL dataset directory. Default: <data-root>/generated/Add_dataset",
     )
     parser.add_argument(
         "--results-root",
-        default="./../Results",
+        type=Path,
+        default=None,
+        help="Results directory. Default: <data-root>/generated/Results",
+    )
+    parser.add_argument(
+        "--image-dir",
+        type=Path,
+        default=None,
+        help="JPEG directory. Default: <data-root>/generated/all_public_UC_images",
     )
     parser.add_argument(
         "--cuda-visible-devices",
@@ -526,9 +520,7 @@ if __name__ == "__main__":
         raise ValueError("--iteration must be >= 0.")
 
     if args.iteration >= 1 and args.initial_result_date is None:
-        raise ValueError(
-            "--initial-result-date is required for AL_1 to AL_6."
-        )
+        raise ValueError("--initial-result-date is required for AL_1 to AL_6.")
 
     if args.iteration >= 1 and "_AL_0" not in args.initial_result_date:
         raise ValueError(
@@ -542,25 +534,24 @@ if __name__ == "__main__":
     selection = args.selection
     initial_result_date = args.initial_result_date
 
-    add_dataset_root = args.add_dataset_root
-    results_root = args.results_root
-
-    image_data_file = "all_public_UC_images"
-
-    data_path = (
-        "./../../../../../Data/UC/"
-        f"{dataset_name}/Images"
+    add_dataset_root = (
+        args.add_dataset_root.expanduser()
+        if args.add_dataset_root is not None
+        else generated_path(args.data_root, "Add_dataset")
     )
-    image_path = os.path.join(
-        data_path,
-        image_data_file,
+    results_root = (
+        args.results_root.expanduser()
+        if args.results_root is not None
+        else generated_path(args.data_root, "Results")
+    )
+    image_path = (
+        args.image_dir.expanduser()
+        if args.image_dir is not None
+        else generated_path(args.data_root, "all_public_UC_images")
     )
 
-    now = datetime.now()
-    date = (
-        now.strftime("%Y%m%d_%H%M%S")
-        + f"_AL_{iteration}"
-    )
+    now = datetime.now().astimezone()
+    date = now.strftime("%Y%m%d_%H%M%S") + f"_AL_{iteration}"
 
     method_type = "RankNet"
     backbone_type = "DenseNet169"
@@ -574,40 +565,28 @@ if __name__ == "__main__":
 
     gpu_count = 1
 
-    fold_lst = [
-        int(x.strip())
-        for x in args.folds.split(",")
-        if x.strip()
-    ]
+    fold_lst = [int(x.strip()) for x in args.folds.split(",") if x.strip()]
 
     os.environ["PYTHONHASHSEED"] = "0"
     os.environ["TF_DETERMINISTIC_OPS"] = "1"
     os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
-    os.environ[
-        "CUDA_VISIBLE_DEVICES"
-    ] = args.cuda_visible_devices
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
 
-    print("")
+    print()
     print("======================================")
     print(" Cumulative Active Learning training")
     print("======================================")
     print(f"al_id                : {al_id}")
     print(f"iteration            : AL_{iteration}")
-    print(
-        f"selection            : "
-        f"{'RBS' if iteration == 0 else selection}"
-    )
-    print(
-        f"initial_result_date : "
-        f"{initial_result_date}"
-    )
+    print(f"selection            : {'RBS' if iteration == 0 else selection}")
+    print(f"initial_result_date : {initial_result_date}")
     print(f"learning_rate        : {learning_rate}")
     print(f"epochs               : {epoch_num}")
     print(f"patience             : {es_patience}")
     print(f"new result_date      : {date}")
 
     for fold in fold_lst:
-        print("")
+        print()
         print(f"fold {fold}")
 
         seed = 220428
@@ -634,10 +613,7 @@ if __name__ == "__main__":
 
         learning()
 
-    print("")
+    print()
     print(f"Finished AL_{iteration} training.")
     print(f"result_date: {date}")
-    print(
-        "results: "
-        f"{os.path.join(results_root, date)}"
-    )
+    print(f"results: {os.path.join(results_root, date)}")

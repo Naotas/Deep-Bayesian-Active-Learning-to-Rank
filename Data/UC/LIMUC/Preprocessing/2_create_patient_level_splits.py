@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 Create patient-level 5-fold train, validation, and test splits.
 
@@ -13,9 +11,10 @@ This script:
 import argparse
 import os
 import random
+from pathlib import Path
 
 import pandas as pd
-
+from data_paths import add_data_root_argument, generated_path
 
 DEFAULT_SEED = 20191125
 N_FOLDS = 5
@@ -31,9 +30,7 @@ def load_metadata(csv_path):
     missing = required - set(data.columns)
 
     if missing:
-        raise ValueError(
-            f"{csv_path} is missing required columns: {sorted(missing)}"
-        )
+        raise ValueError(f"{csv_path} is missing required columns: {sorted(missing)}")
 
     return data
 
@@ -54,10 +51,9 @@ def make_patient_folds(patient_ids, seed=DEFAULT_SEED):
     fold_size = len(patient_list) // N_FOLDS
 
     patient_folds = [
-        patient_list[i * fold_size:(i + 1) * fold_size]
-        for i in range(N_FOLDS - 1)
+        patient_list[i * fold_size : (i + 1) * fold_size] for i in range(N_FOLDS - 1)
     ]
-    patient_folds.append(patient_list[(N_FOLDS - 1) * fold_size:])
+    patient_folds.append(patient_list[(N_FOLDS - 1) * fold_size :])
 
     return patient_folds
 
@@ -120,7 +116,7 @@ def divide_data(csv_path, output_dir, seed=DEFAULT_SEED):
             fold_index,
         )
 
-        print("")
+        print()
         print(f"Fold {fold_num}")
         print(
             f"  patients: train={train_data['patient'].nunique()}, "
@@ -134,24 +130,23 @@ def divide_data(csv_path, output_dir, seed=DEFAULT_SEED):
 
 
 def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    root_dir = os.path.dirname(script_dir)
-    image_dir = os.path.join(root_dir, "Images")
-
     parser = argparse.ArgumentParser(
         description="Create patient-level 5-fold train / validation / test splits."
     )
+    add_data_root_argument(parser)
     parser.add_argument(
         "--csv-path",
-        default=os.path.join(image_dir, "all_public_UC_data.csv"),
-        help="Input metadata CSV created by 1_prepare_uc_image_dataset.py.",
+        type=Path,
+        default=None,
+        help=(
+            "Input metadata CSV. Default: <data-root>/generated/all_public_UC_data.csv"
+        ),
     )
-    original_split_dir = os.path.join(image_dir, "original_splits")
-
     parser.add_argument(
         "--output-dir",
-        default=original_split_dir,
-        help="Directory in which the original fold split CSV files are saved.",
+        type=Path,
+        default=None,
+        help="Output directory. Default: <data-root>/generated/original_splits",
     )
     parser.add_argument(
         "--seed",
@@ -161,9 +156,20 @@ def main():
     )
     args = parser.parse_args()
 
+    csv_path = (
+        args.csv_path.expanduser()
+        if args.csv_path is not None
+        else generated_path(args.data_root, "all_public_UC_data.csv")
+    )
+    output_dir = (
+        args.output_dir.expanduser()
+        if args.output_dir is not None
+        else generated_path(args.data_root, "original_splits")
+    )
+
     divide_data(
-        csv_path=args.csv_path,
-        output_dir=args.output_dir,
+        csv_path=csv_path,
+        output_dir=output_dir,
         seed=args.seed,
     )
 

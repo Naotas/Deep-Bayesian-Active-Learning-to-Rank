@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 Create fold-specific dataset CSV files for downstream training.
 
@@ -11,9 +9,10 @@ This script:
 
 import argparse
 import os
+from pathlib import Path
 
 import pandas as pd
-
+from data_paths import add_data_root_argument, generated_path
 
 N_FOLDS = 5
 SPLIT_NAMES = ["train", "valid", "test"]
@@ -34,13 +33,9 @@ def make_dataset(fold_num, split_name, image_dir, output_dir):
     required = {"filename", "sequence_num", "mayo_num"}
     missing = required - set(data.columns)
     if missing:
-        raise ValueError(
-            f"{input_path} is missing required columns: {sorted(missing)}"
-        )
+        raise ValueError(f"{input_path} is missing required columns: {sorted(missing)}")
 
-    output_data = data[
-        ["filename", "sequence_num", "mayo_num"]
-    ].rename(
+    output_data = data[["filename", "sequence_num", "mayo_num"]].rename(
         columns={
             "sequence_num": "sequence",
             "mayo_num": "MayoLabel",
@@ -57,22 +52,21 @@ def make_dataset(fold_num, split_name, image_dir, output_dir):
 
 
 def main():
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    image_dir = os.path.join(root_dir, "Images")
-    default_input_dir = os.path.join(image_dir, "original_splits")
-
     parser = argparse.ArgumentParser(
         description="Create fold-specific dataset CSV files for downstream training."
     )
+    add_data_root_argument(parser)
     parser.add_argument(
         "--input-dir",
-        default=default_input_dir,
-        help="Directory containing the original fold split CSV files.",
+        type=Path,
+        default=None,
+        help="Input directory. Default: <data-root>/generated/original_splits",
     )
     parser.add_argument(
         "--output-dir",
+        type=Path,
         default=None,
-        help="Output directory. Default: <Images>/dataset",
+        help="Output directory. Default: <data-root>/generated/dataset",
     )
     parser.add_argument(
         "--folds",
@@ -81,34 +75,33 @@ def main():
     )
     args = parser.parse_args()
 
+    input_dir = (
+        args.input_dir.expanduser()
+        if args.input_dir is not None
+        else generated_path(args.data_root, "original_splits")
+    )
     output_dir = (
-        args.output_dir
+        args.output_dir.expanduser()
         if args.output_dir is not None
-        else os.path.join(image_dir, "dataset")
+        else generated_path(args.data_root, "dataset")
     )
     os.makedirs(output_dir, exist_ok=True)
 
-    fold_list = [
-        int(value.strip())
-        for value in args.folds.split(",")
-        if value.strip()
-    ]
+    fold_list = [int(value.strip()) for value in args.folds.split(",") if value.strip()]
 
     for fold_num in fold_list:
         if fold_num < 1 or fold_num > N_FOLDS:
-            raise ValueError(
-                f"Fold number must be between 1 and {N_FOLDS}: {fold_num}"
-            )
+            raise ValueError(f"Fold number must be between 1 and {N_FOLDS}: {fold_num}")
 
         for split_name in SPLIT_NAMES:
             make_dataset(
                 fold_num=fold_num,
                 split_name=split_name,
-                image_dir=args.input_dir,
+                image_dir=input_dir,
                 output_dir=output_dir,
             )
 
-    print("")
+    print()
     print("Finished creating fold-specific dataset CSV files.")
     print(f"Output directory: {output_dir}")
 

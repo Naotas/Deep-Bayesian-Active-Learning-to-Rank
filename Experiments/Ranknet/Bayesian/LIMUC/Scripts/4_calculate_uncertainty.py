@@ -1,6 +1,10 @@
 import argparse
-import pandas as pd
+import os
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
+from data_paths import add_data_root_argument, generated_path
 
 # ============================================================
 # Calculate prediction uncertainty from Monte Carlo Dropout
@@ -16,13 +20,13 @@ import numpy as np
 # 4. Save the mean score and uncertainty for each image.
 #
 # Input:
-# Results/
+# <data-root>/generated/Results/
 #   <result_date>/
 #     fold_<fold>/
 #       <datatype>_prediction.csv
 #
 # Output:
-# Results/
+# <data-root>/generated/Results/
 #   <result_date>/
 #     fold_<fold>/
 #       <datatype>_mean_score_and_uncertainty.csv
@@ -34,11 +38,12 @@ import numpy as np
 #   e.g., python 4_calculate_uncertainty.py 20260825_161805_AL_0
 # ============================================================
 
+
 def calculate_uncertainty():
     # read_csv
-    df = pd.read_table(csv_path, sep=',')
-    filename = df['filename']
-    mayo = np.array(df['label'])  
+    df = pd.read_table(csv_path, sep=",")
+    filename = df["filename"]
+    mayo = np.array(df["label"])
     file_num = len(filename)
 
     mean_preds = []
@@ -51,40 +56,59 @@ def calculate_uncertainty():
 
         mean_data = np.mean(filedata)
         mean_preds.append(mean_data)
-        var_data = np.var(filedata,axis=0)
+        var_data = np.var(filedata, axis=0)
         var_preds.append(var_data)
-    
-    df_certainty = pd.DataFrame()
-    df_certainty['filename'] = filename
-    df_certainty['label'] = mayo
-    df_certainty['var_score'] = var_preds
-    df_certainty['mean_score'] = mean_preds
 
-    path_csv_uncertainty = result_path  + '/{}_mean_score_and_uncertainty.csv'.format(datatype)
+    df_certainty = pd.DataFrame()
+    df_certainty["filename"] = filename
+    df_certainty["label"] = mayo
+    df_certainty["var_score"] = var_preds
+    df_certainty["mean_score"] = mean_preds
+
+    path_csv_uncertainty = result_path + f"/{datatype}_mean_score_and_uncertainty.csv"
     df_certainty.to_csv(path_csv_uncertainty, index=False)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    add_data_root_argument(parser)
     parser.add_argument(
         "result_date",
         help="Result directory containing prediction score files.",
     )
+    parser.add_argument(
+        "--results-root",
+        type=Path,
+        default=None,
+        help="Results directory. Default: <data-root>/generated/Results",
+    )
+    parser.add_argument(
+        "--folds",
+        default="1,2,3,4,5",
+        help="Comma-separated folds. Default: 1,2,3,4,5",
+    )
+    parser.add_argument(
+        "--datatypes",
+        default="train,valid,test",
+        help="Comma-separated dataset splits. Default: train,valid,test",
+    )
     args = parser.parse_args()
 
     result_date = args.result_date
+    results_root = (
+        args.results_root.expanduser()
+        if args.results_root is not None
+        else generated_path(args.data_root, "Results")
+    )
 
-    fold_lst = [1, 2, 3, 4, 5]
-    datatype_lst = ["train", "valid", "test"]
+    fold_lst = [int(value.strip()) for value in args.folds.split(",") if value.strip()]
+    datatype_lst = [
+        value.strip() for value in args.datatypes.split(",") if value.strip()
+    ]
 
     for fold in fold_lst:
         for datatype in datatype_lst:
-            result_path = "./../Results/{}/fold_{}/".format(
-                result_date,
-                fold
-            )
-            csv_path = result_path + "/{}_prediction.csv".format(datatype)
+            result_path = os.path.join(results_root, result_date, f"fold_{fold}")
+            csv_path = os.path.join(result_path, f"{datatype}_prediction.csv")
 
             calculate_uncertainty()
-
- 

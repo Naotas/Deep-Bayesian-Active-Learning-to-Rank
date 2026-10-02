@@ -1,21 +1,22 @@
-import gc
 import argparse
+import gc
 import math
 import os
 import random
+from pathlib import Path
 
 import cv2
 import keras
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from bayesian_densenet import DenseNet169
+from data_paths import add_data_root_argument, generated_path
 from keras import backend as K
+from keras import regularizers
 from keras.layers import Input
 from keras.layers.core import Dense, Dropout
 from keras.models import Model
-from keras import regularizers
-
-from bayesian_densenet import DenseNet169
 
 # ============================================================
 # Predict ranking scores using Monte Carlo Dropout
@@ -30,19 +31,19 @@ from bayesian_densenet import DenseNet169
 # 4. Save the prediction scores for all sampling runs.
 #
 # Input:
-# Data/UC/LIMUC/Images/
+# <data-root>/generated/
 #   dataset/
 #     <fold>_train.csv
 #     <fold>_valid.csv
 #     <fold>_test.csv
 #
-# Results/
+# <data-root>/generated/Results/
 #   <result_date>/
 #     fold_<fold>/
 #       weights/
 #
 # Output:
-# Results/
+# <data-root>/generated/Results/
 #   <result_date>/
 #     fold_<fold>/
 #       <datatype>_prediction.csv
@@ -59,6 +60,7 @@ from bayesian_densenet import DenseNet169
 # 2_train_bayesian_ranknet.py or 6_train_bayesian_ranknet_AL.py.
 # ============================================================
 
+
 # batchgenerator
 class BatchGenerator(keras.utils.Sequence):
     def __init__(self, image, label, image_shape, batch_size, shuffle=True):
@@ -72,7 +74,7 @@ class BatchGenerator(keras.utils.Sequence):
         self.shuffle = shuffle
 
     def __getitem__(self, index):
-        indexes = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
+        indexes = self.indexes[index * self.batch_size : (index + 1) * self.batch_size]
         x_batch = []
         y_batch = []
         for i in indexes:
@@ -82,7 +84,7 @@ class BatchGenerator(keras.utils.Sequence):
             y_batch.append(self.y[i])
 
         x_batch = np.asarray(x_batch)
-        x_batch = x_batch.astype('float32') / 255.0
+        x_batch = x_batch.astype("float32") / 255.0
         y_batch = np.asarray(y_batch)
         return [x_batch, y_batch]
 
@@ -94,49 +96,66 @@ class BatchGenerator(keras.utils.Sequence):
         if self.shuffle == True:
             np.random.shuffle(self.indexes)
 
+
 # prepare dataset
 def prepare_dataset():
-    data_train = pd.read_csv(data_path + '/dataset/{}_{}.csv'.format(fold, datatype))
-    image_train = data_train['filename']
-    label_train = data_train['MayoLabel']
-  
+    dataset_csv = os.path.join(dataset_dir, f"{fold}_{datatype}.csv")
+    data_train = pd.read_csv(dataset_csv)
+    image_train = data_train["filename"]
+    label_train = data_train["MayoLabel"]
+
     image_train = np.array(image_train)
     label_train = np.array(label_train)
 
-    train = [image_path + s for s in image_train]
+    train = [os.path.join(image_path, filename) for filename in image_train]
 
     return train, label_train, image_train
 
+
 # RankNet
 def ranknet():
-    inputs = Input(shape=image_shape, name='data_x')
-    labels = Input(shape=(1, ), name='label')
+    inputs = Input(shape=image_shape, name="data_x")
+    labels = Input(shape=(1,), name="label")
 
-    model_features = DenseNet169(include_top=True, weights="imagenet", dropout_rate=dropout_rate, weight_decay=weight_decay)
-    model_features = Model(inputs=model_features.input, outputs=model_features.get_layer('avg_pool').output)
+    model_features = DenseNet169(
+        include_top=True,
+        weights="imagenet",
+        dropout_rate=dropout_rate,
+        weight_decay=weight_decay,
+    )
+    model_features = Model(
+        inputs=model_features.input, outputs=model_features.get_layer("avg_pool").output
+    )
     x_dropout = Dropout(dropout_rate)(model_features.output, training=True)
-    x_fc = Dense(1, kernel_regularizer=regularizers.l2(weight_decay), name='fc')(x_dropout)
+    x_fc = Dense(1, kernel_regularizer=regularizers.l2(weight_decay), name="fc")(
+        x_dropout
+    )
     x_fc = Model(inputs=model_features.input, outputs=x_fc)
     scores = x_fc(inputs)
     model = Model(inputs=[inputs, labels], outputs=[scores])
     model.compile()
     return model
 
+
 # save_prediction_condition
 def save_condition(train):
     vdic = {
-        'date': result_date,
-        'method': method_type,
-        'backbone': backbone_type,
-        'dataset': dataset_name,
-        'train_num': len(train),
-        'image_shape': image_shape,
-        'batch_size': batch_size,
-        'sampling_num': sampling_num,
-        'gpu_count': gpu_count
+        "date": result_date,
+        "method": method_type,
+        "backbone": backbone_type,
+        "dataset": dataset_name,
+        "data_root": str(args.data_root),
+        "dataset_dir": str(dataset_dir),
+        "image_dir": str(image_path),
+        "train_num": len(train),
+        "image_shape": image_shape,
+        "batch_size": batch_size,
+        "sampling_num": sampling_num,
+        "gpu_count": gpu_count,
     }
-    vdic = pd.DataFrame.from_dict(vdic, orient='index').T
-    vdic.to_csv(result_path + '/{}_prediction_condition.csv'.format(datatype), index=False)
+    vdic = pd.DataFrame.from_dict(vdic, orient="index").T
+    vdic.to_csv(result_path + f"/{datatype}_prediction_condition.csv", index=False)
+
 
 # predict
 def predict():
@@ -158,14 +177,14 @@ def predict():
     )
 
     if not weight_path_lst:
-        raise FileNotFoundError(
-            f"No .h5 weight files found in: {weight_path}"
-        )
-    
+        raise FileNotFoundError(f"No .h5 weight files found in: {weight_path}")
+
     model.load_weights(weight_path_lst[-1])
 
     # batch_generator
-    train_batch_generator = BatchGenerator(train, label_train, image_shape, batch_size, shuffle=False)
+    train_batch_generator = BatchGenerator(
+        train, label_train, image_shape, batch_size, shuffle=False
+    )
 
     # model.predict
     score_lst = []
@@ -177,11 +196,11 @@ def predict():
 
     # save_result
     df_dataset = pd.DataFrame()
-    df_dataset['filename'] = image_train
-    df_dataset['label'] = label_train
+    df_dataset["filename"] = image_train
+    df_dataset["label"] = label_train
     for n in range(sampling_num):
-        df_dataset['sampling_' + str(n)] = score_lst[n]
-    csv_path = result_path + '/{}_prediction.csv'.format(datatype)
+        df_dataset["sampling_" + str(n)] = score_lst[n]
+    csv_path = result_path + f"/{datatype}_prediction.csv"
     df_dataset.to_csv(csv_path, index=False)
 
     # model_reset
@@ -194,10 +213,40 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Predict ranking scores using Monte Carlo Dropout."
     )
+    add_data_root_argument(parser)
 
+    parser.add_argument("result_date", help="Training result directory.")
     parser.add_argument(
-        "result_date",
-        help="Training result directory."
+        "--dataset-dir",
+        type=Path,
+        default=None,
+        help="Dataset CSV directory. Default: <data-root>/generated/dataset",
+    )
+    parser.add_argument(
+        "--image-dir",
+        type=Path,
+        default=None,
+        help="JPEG directory. Default: <data-root>/generated/all_public_UC_images",
+    )
+    parser.add_argument(
+        "--results-root",
+        type=Path,
+        default=None,
+        help="Results directory. Default: <data-root>/generated/Results",
+    )
+    parser.add_argument(
+        "--folds",
+        default="1,2,3,4,5",
+        help="Comma-separated folds. Default: 1,2,3,4,5",
+    )
+    parser.add_argument(
+        "--datatypes",
+        default="train,valid,test",
+        help="Comma-separated dataset splits. Default: train,valid,test",
+    )
+    parser.add_argument(
+        "--cuda-visible-devices",
+        default="0",
     )
 
     args = parser.parse_args()
@@ -205,16 +254,25 @@ if __name__ == "__main__":
     dataset_name = "LIMUC"
     result_date = args.result_date
 
-    # image_data_file
-    image_data_file = "all_public_UC_images"
-
-    # path
-    data_path = './../../../../../Data/UC/{}/Images'.format(dataset_name)
-    image_path = data_path + '/{}/'.format(image_data_file)
+    dataset_dir = (
+        args.dataset_dir.expanduser()
+        if args.dataset_dir is not None
+        else generated_path(args.data_root, "dataset")
+    )
+    image_path = (
+        args.image_dir.expanduser()
+        if args.image_dir is not None
+        else generated_path(args.data_root, "all_public_UC_images")
+    )
+    results_root = (
+        args.results_root.expanduser()
+        if args.results_root is not None
+        else generated_path(args.data_root, "Results")
+    )
 
     # prediction_condition
-    method_type = 'RankNet'
-    backbone_type = 'DenseNet169'
+    method_type = "RankNet"
+    backbone_type = "DenseNet169"
     image_shape = (224, 224, 3)
     batch_size = 64
     epoch_num = None
@@ -227,27 +285,33 @@ if __name__ == "__main__":
     # gpu
     gpu_count = 1
 
-    fold_lst = [1,2,3,4,5]
-    datatype_lst = ['train','valid','test']
+    fold_lst = [int(value.strip()) for value in args.folds.split(",") if value.strip()]
+    datatype_lst = [
+        value.strip() for value in args.datatypes.split(",") if value.strip()
+    ]
     for fold in fold_lst:
-        for datatype in datatype_lst:    
+        for datatype in datatype_lst:
             # random_seed
-            os.environ['PYTHONHASHSEED'] = '0'
-            os.environ['TF_DETERMINISTIC_OPS'] = '1'
-            os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
-            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+            os.environ["PYTHONHASHSEED"] = "0"
+            os.environ["TF_DETERMINISTIC_OPS"] = "1"
+            os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+            os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
 
             seed = 220428
             tf.random.set_seed(seed)
             np.random.seed(seed)
             random.seed(seed)
 
-            session_conf = tf.compat.v1.ConfigProto(intra_op_parallelism_threads=1, inter_op_parallelism_threads=1)
-            sess = tf.compat.v1.Session(graph=tf.compat.v1.get_default_graph(), config=session_conf)
+            session_conf = tf.compat.v1.ConfigProto(
+                intra_op_parallelism_threads=1, inter_op_parallelism_threads=1
+            )
+            sess = tf.compat.v1.Session(
+                graph=tf.compat.v1.get_default_graph(), config=session_conf
+            )
             tf.compat.v1.keras.backend.set_session(sess)
 
             # result_path
-            result_path = './../Results/{}/fold_{}/'.format(result_date, fold)
+            result_path = os.path.join(results_root, result_date, f"fold_{fold}")
 
             # predict
             predict()
