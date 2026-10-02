@@ -31,7 +31,22 @@ The original experiments reported in the paper were conducted using:
 - TensorFlow 1.13.1
 - Keras 2.2.4
 
-For this public code release, we provide a Docker environment based on NVIDIA TensorFlow 21.05 (`nvcr.io/nvidia/tensorflow:21.05-tf2-py3`) with Keras 2.4.3.
+For this public code release, the reproducible environment uses Python 3.8 and
+the standard PyPI `tensorflow==2.4.0` package. GPU execution uses CUDA 11.0 and
+cuDNN 8 from the Docker base image. The main compatibility pins are:
+
+- NumPy 1.19.5
+- SciPy 1.5.4
+- Keras 2.4.3
+- h5py 2.10.0
+- OpenCV headless 4.5.1.48
+
+The code does not import scikit-learn, so it is intentionally absent. OpenCV is
+used only for file I/O and resizing; no GUI API is required.
+
+`pyproject.toml` records the direct dependencies and `uv.lock` records the
+complete resolved environment. This environment targets Linux x86_64 because
+TensorFlow 2.4.0 does not provide a macOS arm64 wheel.
 
 The released code has been reorganized and updated for public use and is therefore not an exact archival copy of the original experimental code.
 
@@ -121,17 +136,42 @@ This keeps both source and generated data outside the project checkout. You can
 override an individual input or output with the more specific options shown by
 `--help`.
 
-### 2. Build the Docker image
+### 2. Create the uv environment directly on the server
+
+On a Linux x86_64 server, create the exact locked environment from the project
+root:
+
+```bash
+uv sync --frozen --no-dev
+```
+
+GPU execution outside Docker additionally requires CUDA 11.0 and cuDNN 8 to be
+available on the server. Without those libraries, this environment can only use
+the CPU.
+
+Use `uv run --frozen` for commands in this environment. Do not run `uv sync` on
+an Apple Silicon Mac for this legacy environment; build and run the Docker image
+instead.
+
+### 3. Build and verify the Docker image
 
 From the project root, run:
 
 ```bash
-cd Docker
-bash run_build.sh
-cd ..
+bash Docker/run_build.sh
 ```
 
-### 3. Start the Docker container
+The image build performs a CPU smoke test using generated dummy data. On the
+NVIDIA server, also verify that TensorFlow sees the GPU:
+
+```bash
+bash Docker/run_smoke_test.sh
+```
+
+This GPU check must report at least one device. The host needs an NVIDIA driver
+that supports CUDA 11.0 and the NVIDIA Container Toolkit.
+
+### 4. Start the Docker container
 
 From the project root, run:
 
@@ -144,7 +184,7 @@ The project directory is mounted to `/workdir`. `run_docker.sh` also mounts
 environment variable through. Set `LIMUC_DATA_ROOT` before starting the container
 when using a different data-server path.
 
-### 4. Prepare the dataset
+### 5. Prepare the dataset
 
 Inside the Docker container, move to:
 
@@ -155,21 +195,21 @@ cd /workdir/Data/UC/LIMUC/Preprocessing
 Run the preprocessing scripts sequentially:
 
 ```bash
-python 1_prepare_uc_image_dataset.py
-python 2_create_patient_level_splits.py
-python 3_format_fold_datasets.py
-python 4_create_training_only_datasets.py
+uv run --frozen --no-sync 1_prepare_uc_image_dataset.py
+uv run --frozen --no-sync 2_create_patient_level_splits.py
+uv run --frozen --no-sync 3_format_fold_datasets.py
+uv run --frozen --no-sync 4_create_training_only_datasets.py
 ```
 
 To specify the root without an environment variable, pass the same option to every
 command, for example:
 
 ```bash
-python 1_prepare_uc_image_dataset.py \
+uv run --frozen --no-sync 1_prepare_uc_image_dataset.py \
     --data-root /data/umeiro0/patient_based_classified_images
 ```
 
-### 5. Run Bayesian active learning-to-rank
+### 6. Run Bayesian active learning-to-rank
 
 Move to:
 
@@ -180,21 +220,21 @@ cd /workdir/Experiments/Ranknet/Bayesian/LIMUC/Scripts
 To start the active-learning procedure, run scripts 1–6 sequentially:
 
 ```bash
-python 1_initial_learning_make_pair.py
-python 2_train_bayesian_ranknet.py
-python 3_predict_score.py <AL_0_result_date>
-python 4_calculate_uncertainty.py <AL_0_result_date>
-python 5_active_learning_make_pair.py <AL_0_result_date> --iteration 1
-python 6_train_bayesian_ranknet_AL.py --iteration 1 --initial-result-date <AL_0_result_date>
+uv run --frozen --no-sync 1_initial_learning_make_pair.py
+uv run --frozen --no-sync 2_train_bayesian_ranknet.py
+uv run --frozen --no-sync 3_predict_score.py <AL_0_result_date>
+uv run --frozen --no-sync 4_calculate_uncertainty.py <AL_0_result_date>
+uv run --frozen --no-sync 5_active_learning_make_pair.py <AL_0_result_date> --iteration 1
+uv run --frozen --no-sync 6_train_bayesian_ranknet_AL.py --iteration 1 --initial-result-date <AL_0_result_date>
 ```
 
 After completing script 6, repeat scripts 3–6 for each subsequent active-learning iteration. For example, for iteration 2:
 
 ```bash
-python 3_predict_score.py <AL_1_result_date>
-python 4_calculate_uncertainty.py <AL_1_result_date>
-python 5_active_learning_make_pair.py <AL_1_result_date> --iteration 2
-python 6_train_bayesian_ranknet_AL.py --iteration 2 --initial-result-date <AL_0_result_date>
+uv run --frozen --no-sync 3_predict_score.py <AL_1_result_date>
+uv run --frozen --no-sync 4_calculate_uncertainty.py <AL_1_result_date>
+uv run --frozen --no-sync 5_active_learning_make_pair.py <AL_1_result_date> --iteration 2
+uv run --frozen --no-sync 6_train_bayesian_ranknet_AL.py --iteration 2 --initial-result-date <AL_0_result_date>
 ```
 
 Here, `<AL_0_result_date>` refers to the result directory from the initial training, and `<AL_1_result_date>` refers to the result directory from the first active-learning iteration.

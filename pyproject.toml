@@ -1,0 +1,37 @@
+[project]
+name = "deep-bayesian-active-learning-to-rank"
+version = "0.1.0"
+description = "Deep Bayesian active learning-to-rank for LIMUC severity estimation"
+requires-python = ">=3.8,<3.9"
+dependencies = [
+    "h5py==2.10.0",
+    "ipython==7.16.3",
+    "keras==2.4.3",
+    "matplotlib==3.3.4",
+    "numpy==1.19.5",
+    "opencv-python-headless==4.5.1.48",
+    "pandas==1.1.5",
+    "pillow==8.4.0",
+    "protobuf==3.20.3",
+    "scipy==1.5.4",
+    "seaborn==0.11.2",
+    "tensorboard==2.4.0",
+    "tensorflow==2.4.0",
+    "tensorflow-estimator==2.4.0",
+    "tqdm==4.64.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==7.4.4",
+    "ruff==0.1.15",
+]
+
+[tool.uv]
+package = false
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
