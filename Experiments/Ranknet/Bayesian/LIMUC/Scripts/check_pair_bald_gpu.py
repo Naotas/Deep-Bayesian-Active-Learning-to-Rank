@@ -4,6 +4,42 @@ import argparse
 import os
 from pathlib import Path
 
+import numpy as np
+
+
+def assert_numerically_consistent(label, actual, expected, rtol, atol):
+    """Check float32 GPU results while reporting the observed discrepancy.
+
+    Args:
+        label (str): Description shown when the comparison fails.
+        actual: First numeric result.
+        expected: Reference numeric result.
+        rtol (float): Relative tolerance for float32 GPU arithmetic.
+        atol (float): Absolute tolerance for values close to zero.
+
+    Returns:
+        float: Maximum absolute difference.
+
+    Raises:
+        AssertionError: If the discrepancy exceeds the configured tolerances.
+    """
+    actual = np.asarray(actual, dtype=np.float64)
+    expected = np.asarray(expected, dtype=np.float64)
+    maximum_difference = float(np.max(np.abs(actual - expected)))
+    np.testing.assert_allclose(
+        actual,
+        expected,
+        rtol=rtol,
+        atol=atol,
+        err_msg=(
+            f"{label} failed; max_abs_difference={maximum_difference:.9g}. "
+            "This can indicate that masks are not shared, unless the difference "
+            "is only float32 GPU roundoff."
+        ),
+    )
+    print(f"{label}: max_abs_difference={maximum_difference:.9g}")
+    return maximum_difference
+
 
 def main():
     """Validate GPU discovery, checkpoint loading, shared masks, and frozen BN."""
@@ -14,16 +50,19 @@ def main():
     parser.add_argument("--cuda-visible-devices", default="0")
     parser.add_argument("--mc-samples", type=int, default=3)
     parser.add_argument("--seed", type=int, default=240119)
+    parser.add_argument("--rtol", type=float, default=1e-5)
+    parser.add_argument("--atol", type=float, default=1e-6)
     args = parser.parse_args()
     if args.mc_samples < 2:
         parser.error("--mc-samples must be at least 2 for this check.")
+    if args.rtol < 0 or args.atol < 0:
+        parser.error("--rtol and --atol must be non-negative.")
     args.checkpoint = args.checkpoint.expanduser()
     if not args.checkpoint.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
 
-    import numpy as np
     from shared_mc_dropout import (
         _assert_batch_normalization_unchanged,
         _batch_normalization_state,
@@ -42,9 +81,27 @@ def main():
     four_images = np.ones((args.mc_samples * 4, 224, 224, 3), dtype=np.float32)
     first_scores = model.predict(two_images, verbose=0).reshape(args.mc_samples, 2)
     second_scores = model.predict(four_images, verbose=0).reshape(args.mc_samples, 4)
-    np.testing.assert_allclose(first_scores[:, 0], first_scores[:, 1])
-    np.testing.assert_allclose(second_scores[:, 0], second_scores[:, 3])
-    np.testing.assert_allclose(first_scores[:, 0], second_scores[:, 0])
+    assert_numerically_consistent(
+        "shared mask within the two-image batch",
+        first_scores[:, 0],
+        first_scores[:, 1],
+        rtol=args.rtol,
+        atol=args.atol,
+    )
+    assert_numerically_consistent(
+        "shared mask within the four-image batch",
+        second_scores[:, 0],
+        second_scores[:, 3],
+        rtol=args.rtol,
+        atol=args.atol,
+    )
+    assert_numerically_consistent(
+        "shared mask across different chunk sizes",
+        first_scores[:, 0],
+        second_scores[:, 0],
+        rtol=args.rtol,
+        atol=args.atol,
+    )
     _assert_batch_normalization_unchanged(bn_before, model)
     print(
         "GPU, checkpoint, shared-mask, chunk-consistency, and frozen-BN checks passed."
