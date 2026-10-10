@@ -293,7 +293,8 @@ SHARED_AL0_CACHE=/data/umeiro0/patient_based_classified_images/generated/PairBAL
 
 First run the small A100 check. It uses generated tensors, loads the existing HDF5
 checkpoint, verifies masks across image chunks, and confirms that BatchNormalization
-statistics do not change.
+statistics do not change. The check uses equal-sized chunks, matching acquisition
+inference, which pads the final partial chunk and discards its padded scores.
 
 ```bash
 uv run --frozen --no-sync check_pair_bald_gpu.py \

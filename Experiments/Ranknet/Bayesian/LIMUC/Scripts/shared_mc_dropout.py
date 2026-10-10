@@ -271,6 +271,7 @@ def predict_aligned_scores(
 
     for start in range(0, len(image_ids), image_batch_size):
         chunk_ids = image_ids[start : start + image_batch_size]
+        valid_image_count = len(chunk_ids)
         images = []
         for image_id in chunk_ids:
             image_path = os.path.join(str(image_dir), image_id)
@@ -280,13 +281,21 @@ def predict_aligned_scores(
             image = cv2.resize(image, dsize=(image_shape[0], image_shape[1]))
             images.append(image)
         batch = np.asarray(images, dtype=np.float32) / 255.0
+        if valid_image_count < image_batch_size:
+            padding = np.repeat(
+                batch[-1:], image_batch_size - valid_image_count, axis=0
+            )
+            batch = np.concatenate([batch, padding], axis=0)
         packed_batch = np.tile(batch, (mc_samples, 1, 1, 1))
         packed_scores = model.predict(
             packed_batch, batch_size=len(packed_batch), verbose=0
         )
-        scores[:, start : start + len(chunk_ids)] = np.asarray(
-            packed_scores, dtype=np.float32
-        ).reshape(mc_samples, len(chunk_ids))
+        chunk_scores = np.asarray(packed_scores, dtype=np.float32).reshape(
+            mc_samples, image_batch_size
+        )
+        scores[:, start : start + valid_image_count] = chunk_scores[
+            :, :valid_image_count
+        ]
 
     _assert_batch_normalization_unchanged(bn_before, model)
     if not np.all(np.isfinite(scores)):
@@ -335,7 +344,7 @@ def cache_metadata(
 ):
     """Create the conditions that uniquely identify an aligned MC cache."""
     return {
-        "format_version": 1,
+        "format_version": 2,
         "fold": int(fold),
         "mc_samples": int(mc_samples),
         "seed": int(seed),
@@ -343,6 +352,7 @@ def cache_metadata(
         "image_shape": list(image_shape),
         "dropout_rate": float(dropout_rate),
         "dropout_mode": "stateless_masks_shared_across_images_and_chunks",
+        "partial_chunk_policy": "repeat_last_image_to_fixed_batch_size",
         "batch_normalization_mode": "inference",
         "image_count": len(image_ids),
         "image_order_sha256": image_order_digest(image_ids),

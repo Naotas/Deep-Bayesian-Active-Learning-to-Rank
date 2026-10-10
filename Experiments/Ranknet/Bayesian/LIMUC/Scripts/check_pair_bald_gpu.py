@@ -77,26 +77,29 @@ def main():
         seed=args.seed,
     )
     bn_before = _batch_normalization_state(model)
-    two_images = np.ones((args.mc_samples * 2, 224, 224, 3), dtype=np.float32)
-    four_images = np.ones((args.mc_samples * 4, 224, 224, 3), dtype=np.float32)
-    first_scores = model.predict(two_images, verbose=0).reshape(args.mc_samples, 2)
-    second_scores = model.predict(four_images, verbose=0).reshape(args.mc_samples, 4)
+    chunk = np.ones((args.mc_samples * 2, 224, 224, 3), dtype=np.float32)
+    first_scores = model.predict(chunk, batch_size=len(chunk), verbose=0).reshape(
+        args.mc_samples, 2
+    )
+    second_scores = model.predict(chunk, batch_size=len(chunk), verbose=0).reshape(
+        args.mc_samples, 2
+    )
     assert_numerically_consistent(
-        "shared mask within the two-image batch",
+        "shared mask within the first fixed-size chunk",
         first_scores[:, 0],
         first_scores[:, 1],
         rtol=args.rtol,
         atol=args.atol,
     )
     assert_numerically_consistent(
-        "shared mask within the four-image batch",
+        "shared mask within the second fixed-size chunk",
         second_scores[:, 0],
-        second_scores[:, 3],
+        second_scores[:, 1],
         rtol=args.rtol,
         atol=args.atol,
     )
     assert_numerically_consistent(
-        "shared mask across different chunk sizes",
+        "shared mask across equal-size chunks",
         first_scores[:, 0],
         second_scores[:, 0],
         rtol=args.rtol,
@@ -104,7 +107,8 @@ def main():
     )
     _assert_batch_normalization_unchanged(bn_before, model)
     print(
-        "GPU, checkpoint, shared-mask, chunk-consistency, and frozen-BN checks passed."
+        "GPU, checkpoint, shared-mask, fixed-shape chunk consistency, and frozen-BN "
+        "checks passed."
     )
 
 

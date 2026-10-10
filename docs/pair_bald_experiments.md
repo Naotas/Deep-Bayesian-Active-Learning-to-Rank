@@ -122,6 +122,8 @@ the image dimension is shared. Repeating the same stateless generation in later
 chunks reproduces the same mask, so `f_t(x_i)` and every `f_t(x_j)` use the same
 Dropout realization across chunk boundaries. BatchNormalization remains in
 inference mode, and its moving statistics are checked before and after acquisition.
+The final partial image chunk repeats its last image as padding so every GPU call
+has the same batch shape; padded scores are discarded.
 
 Only the aligned `T × N` image-score cache is stored. Pair probabilities are
 calculated for one anchor and one candidate chunk at a time; no `N × N × T` tensor
