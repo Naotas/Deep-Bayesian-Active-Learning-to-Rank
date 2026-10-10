@@ -29,6 +29,9 @@ PIPELINE_SCRIPTS = [
         "4_calculate_uncertainty.py",
         "5_active_learning_make_pair.py",
         "6_train_bayesian_ranknet_AL.py",
+        "7_select_comparison_pairs.py",
+        "8_train_pair_acquisition.py",
+        "9_predict_pair_experiment.py",
     ]
 ]
 
