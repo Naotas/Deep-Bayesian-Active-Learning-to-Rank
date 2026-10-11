@@ -87,6 +87,7 @@ Deep-Bayesian-Active-Learning-to-Rank/
                     ├── 8_train_pair_acquisition.py
                     ├── 9_predict_pair_experiment.py
                     ├── 10_evaluate_pair_experiment.py
+                    ├── 11_run_all_folds.py
                     ├── check_pair_bald_gpu.py
                     ├── pair_acquisition.py
                     ├── pair_evaluation.py
@@ -433,6 +434,167 @@ Selection, training, and prediction refuse to overwrite existing destinations. A
 `--resume` to the same command to accept an already completed matching run. An
 incomplete directory is rejected so a restart cannot silently double-count pairs or
 budget; correct the partial destination explicitly before retrying.
+
+### Run all five folds together
+
+After completing initial learning for folds 1–5, use `11_run_all_folds.py` to
+run pair selection, training, prediction, and evaluation from one terminal or
+tmux session. The default is all five folds and all four acquisition methods.
+With five GPUs, each fold runs on its own GPU; the four methods run sequentially
+inside each fold. This starts five GPU processes at a time rather than twenty.
+Supplying fewer GPUs queues the remaining folds, without sharing a GPU between
+workers. Use GPU indexes or full GPU UUIDs allocated to your job.
+
+Set `INITIAL_MODEL_ROOT` to the existing AL_0 result directory that contains
+`fold_1/weights` through `fold_5/weights`. The runner selects the highest saved
+epoch in each fold. The existing callback saves only validation-loss improvements,
+so this is the last saved best model, including when filenames have equal rounded
+losses. Initial models and initial pairs are never retrained or overwritten.
+
+```bash
+cd /workdir/Experiments/Ranknet/Bayesian/LIMUC/Scripts
+
+export LIMUC_DATA_ROOT=/data/umeiro0/patient_based_classified_images
+INITIAL_MODEL_ROOT=/absolute/path/to/the/saved_AL_0_result_directory
+INITIAL_PAIRS_ROOT=${LIMUC_DATA_ROOT}/generated/Add_dataset/LIMUC_AL_001/AL_0
+EXPERIMENT_ID=pair_bald_all_folds
+GPU_LIST=0,1,2,3,4
+```
+
+Replace `INITIAL_MODEL_ROOT` with your actual saved result directory. For standard
+initial training it is under `${LIMUC_DATA_ROOT}/generated/Results/` and ends in
+`_AL_0`. Do not use a single fold's `weights` directory for this argument.
+
+First preview the commands. This verifies the saved initial files without loading
+TensorFlow, requesting GPUs, or creating results. Future checkpoint paths appear
+as `<best-checkpoint>.h5` until those models have been trained.
+
+```bash
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --gpus "${GPU_LIST}" \
+    --rounds 1 \
+    --dry-run
+```
+
+Run the complete first round for all folds and methods:
+
+```bash
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --gpus "${GPU_LIST}" \
+    --rounds 1
+```
+
+If initial uncertainty CSVs are not supplied, the runner predicts the training
+images once per fold from the saved AL_0 checkpoint. These predictions are saved
+under the new experiment's `initial_predictions/seed_<seed>/fold_<fold>` directory
+and shared across methods. To reuse existing uncertainty CSVs instead, add
+`--initial-uncertainty-root /absolute/path/to/the/prediction_result_directory`;
+that directory must contain `fold_1/train_mean_score_and_uncertainty.csv` through
+`fold_5/train_mean_score_and_uncertainty.csv`. Keep this option the same when
+resuming the experiment.
+
+You can run each stage separately across all five folds. Each command completes
+before the next one should be started. `--stage train` is useful when pair
+selection for all folds is already complete:
+
+```bash
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --gpus "${GPU_LIST}" --stage select
+
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --gpus "${GPU_LIST}" --stage train
+
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --gpus "${GPU_LIST}" --stage predict
+
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --gpus "${GPU_LIST}" --stage evaluate
+```
+
+Evaluation uses fold-local files under `fold_performance/` while the workers are
+running. After they finish, the runner merges the rows into `performance.csv`,
+preserving existing rows and updating matching method/fold/seed/round identities.
+Do not run manual evaluations that write the same `performance.csv` while this
+runner is active. Evaluation-only execution does not require a GPU.
+
+Set `--rounds 3` to execute rounds 1–3, or use the following command to continue
+from completed round 1 through rounds 2–3:
+
+```bash
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --gpus "${GPU_LIST}" \
+    --start-round 2 --rounds 3
+```
+
+Later rounds use each method's own previous model and uncertainty for selection.
+Training always loads the same saved AL_0 checkpoint, as in single-fold execution.
+`--pair-budget`, `--anchor-count`, `--anchor-rate`, `--partner-cap`, `--mc-samples`,
+`--image-batch-size`, `--candidate-chunk-size`, `--batch-size`, `--epochs`,
+`--patience`, and `--learning-rate` are applied identically to every fold/method.
+The default budgets remain fold-dependent because the default anchor count is 5%
+of that fold's training images; methods within a fold share the same budget.
+Use `--methods pair_bald` for only that method, or `--folds 1,2` for a subset.
+
+For completed outputs, add `--resume` to the same command:
+
+```bash
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --gpus "${GPU_LIST}" \
+    --rounds 1 --resume
+```
+
+The runner checks saved conditions before skipping completed work. It rejects
+incomplete outputs, and it does not resume training midway through an epoch.
+Preserve interrupted output directories by moving them aside before retrying.
+A failed stage stops that fold; other folds finish, and the runner exits with a
+failure status. Separate step logs and the resolved initial checkpoint paths are
+saved under `runner_logs/<invocation>/`. The runner prevents a second batch runner
+from starting in the same experiment while the first is active.
+
+If you already chose specific AL_0 checkpoints for earlier comparisons, use those
+same files. Replace `--initial-model-root` with
+`--initial-checkpoints-csv /absolute/path/to/initial_checkpoints.csv`. This CSV has
+the following format; use the actual existing paths, not these placeholders:
+
+```csv
+fold,checkpoint
+1,/absolute/path/to/fold_1/weights/epochXXXX-X.XXXX.h5
+2,/absolute/path/to/fold_2/weights/epochXXXX-X.XXXX.h5
+3,/absolute/path/to/fold_3/weights/epochXXXX-X.XXXX.h5
+4,/absolute/path/to/fold_4/weights/epochXXXX-X.XXXX.h5
+5,/absolute/path/to/fold_5/weights/epochXXXX-X.XXXX.h5
+```
+
+For a small server GPU check, first run `check_pair_bald_gpu.py` with one existing
+AL_0 checkpoint as described above. To check the batch workflow in a separate
+experiment, use `--experiment-id pair_bald_all_folds_smoke --methods pair_bald
+--anchor-count 2 --pair-budget 2 --mc-samples 3 --epochs 1`. This still predicts
+the full fold pools, so it is not a small-data benchmark. Keep the production
+defaults for the main experiment.
 
 ## Citation
 
