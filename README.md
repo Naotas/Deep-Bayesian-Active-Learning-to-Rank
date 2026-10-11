@@ -445,6 +445,24 @@ inside each fold. This starts five GPU processes at a time rather than twenty.
 Supplying fewer GPUs queues the remaining folds, without sharing a GPU between
 workers. Use GPU indexes or full GPU UUIDs allocated to your job.
 
+If other users are running jobs, list only the GPUs you may use; `--gpus` specifies
+device IDs, not a GPU count. For example, if GPUs 2 and 7 are available, use
+`--gpus 2,7`. GPU 2 processes folds 1, 3, and 5 in order, while GPU 7 processes
+folds 2 and 4. All five folds still run. The runner does not automatically select
+unoccupied GPUs or add newly available GPUs during a run.
+
+| Available GPUs | Example `--gpus` | Simultaneous fold workers |
+|---|---|---|
+| 4 | `0,2,5,7` | 4; fold 5 waits behind fold 1 |
+| 3 | `1,4,6` | 3; folds 4 and 5 wait |
+| 2 | `2,7` | 2; folds 3–5 wait |
+| 1 | `6` | 1; folds 1–5 run sequentially |
+
+Check GPU usage with `nvidia-smi` and follow the server's allocation rules before
+choosing IDs. If no GPU is available, start the GPU stages later; the runner does
+not switch them to CPU. GPU assignments can be changed between invocations,
+including when using `--resume` to skip completed matching steps.
+
 Set `INITIAL_MODEL_ROOT` to the existing AL_0 result directory that contains
 `fold_1/weights` through `fold_5/weights`. The runner selects the highest saved
 epoch in each fold. The existing callback saves only validation-loss improvements,

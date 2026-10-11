@@ -551,7 +551,15 @@ def parse_args(argv=None):
     parser.add_argument("--initial-pairs-root", type=Path)
     parser.add_argument("--initial-uncertainty-root", type=Path)
     parser.add_argument("--experiment-root", type=Path)
-    parser.add_argument("--gpus", required=True, type=comma_separated)
+    parser.add_argument(
+        "--gpus",
+        required=True,
+        type=comma_separated,
+        help=(
+            "Comma-separated GPU indexes or UUIDs available to your job. "
+            "With fewer GPUs than folds, remaining folds queue on those devices."
+        ),
+    )
     parser.add_argument(
         "--folds", type=comma_separated, default=["1", "2", "3", "4", "5"]
     )

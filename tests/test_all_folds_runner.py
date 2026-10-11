@@ -524,8 +524,11 @@ def test_actual_evaluation_child_writes_fold_local_csv(runner, tmp_path, input_p
     assert result["cumulative_pair_count"].item() == 1
 
 
-def test_two_gpu_lanes_queue_extra_folds_without_sharing_devices(
-    runner, tmp_path, input_paths, monkeypatch
+@pytest.mark.parametrize(
+    "gpus", [("6",), ("2", "7"), ("1", "4", "6"), ("0", "2", "5", "7")]
+)
+def test_limited_gpu_lanes_queue_all_folds_without_sharing_devices(
+    runner, tmp_path, input_paths, monkeypatch, gpus
 ):
     """With fewer GPUs, folds must queue behind a single worker on each device."""
     args = arguments(
@@ -533,7 +536,7 @@ def test_two_gpu_lanes_queue_extra_folds_without_sharing_devices(
         tmp_path,
         input_paths,
         "--gpus",
-        "2,3",
+        ",".join(gpus),
         "--stage",
         "select",
         "--methods",
@@ -542,14 +545,14 @@ def test_two_gpu_lanes_queue_extra_folds_without_sharing_devices(
     calls = []
     active_gpus = set()
     lock = threading.Lock()
-    barrier = threading.Barrier(2)
+    barrier = threading.Barrier(len(gpus))
 
     def execute(args, fold, gpu, label, script, options, log_dir):
         with lock:
             assert gpu not in active_gpus
             active_gpus.add(gpu)
             calls.append((fold, gpu))
-        if fold <= 2:
+        if fold <= len(gpus):
             barrier.wait(timeout=10)
         fake_child(script, options)
         with lock:
@@ -559,7 +562,11 @@ def test_two_gpu_lanes_queue_extra_folds_without_sharing_devices(
     monkeypatch.setattr(runner, "check_gpus", lambda gpus: gpus)
     runner.run_experiment(args)
 
-    assert sorted(calls) == [(1, "2"), (2, "3"), (3, "2"), (4, "3"), (5, "2")]
+    assert sorted(calls) == [
+        (fold, gpus[(fold - 1) % len(gpus)]) for fold in range(1, 6)
+    ]
+    assert {gpu for _, gpu in calls} == set(gpus)
+    assert len(calls) == 5
 
 
 def test_second_batch_runner_cannot_enter_the_same_experiment(
