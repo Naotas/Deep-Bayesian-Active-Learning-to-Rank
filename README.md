@@ -614,6 +614,127 @@ experiment, use `--experiment-id pair_bald_all_folds_smoke --methods pair_bald
 the full fold pools, so it is not a small-data benchmark. Keep the production
 defaults for the main experiment.
 
+### Plot Figure 4/6-style comparisons from saved results
+
+`12_plot_pair_experiments.py` creates tables and figures for the four partner
+selection methods. It reads CSVs only: no TensorFlow import, GPU, prediction,
+training, or changes to saved experiment results are needed. Run it after the
+requested rounds have finished, not while their CSVs are being written.
+
+The aggregation follows the axes and five-fold averaging in Sections 5.1.5 and
+5.1.6 of the [paper](https://arxiv.org/html/2409.04952v1), with the following
+explicit conventions for this comparison:
+
+- Figure 4: two line charts, `overall` and `neighboring`. Each point is the
+  equally weighted mean test accuracy of folds 1–5. The shaded band is mean ±
+  one **sample standard deviation** across folds (`ddof=1`), in percentage
+  points. This added band is not MC Dropout uncertainty, variance, standard
+  error, or a confidence interval. Same-grade pairs remain excluded from these
+  directional accuracies by the existing evaluator.
+- The horizontal axis uses the **configured nominal** labeling ratio,
+  `20 + 5 * iteration` percent: iterations 0, 3, 6, and 8 correspond to 20%,
+  35%, 50%, and 60%. It is not computed from unique-image coverage. Actual
+  cumulative pair counts are preserved in the exported tables. Custom
+  experiments can explicitly set `--initial-labeling-percent` and
+  `--round-labeling-percent`; these options change labels, not the experiment.
+- Figure 6: four grouped bar charts for iterations 0, 3, 6, and 8. Each Mayo
+  grade has four method bars. Heights are the equally weighted five-fold mean
+  **number of unique images**, not class percentages or endpoint appearance
+  counts. Later iterations read the saved `mayo_grade_distribution.csv` in each
+  selection directory. These files count both endpoints of cumulative training
+  pairs, deduplicated within each fold; partner-only images are included. This
+  distinction matters when partners can come from the entire training split.
+  All four charts share the same y-axis scale. The tables also include fold-wise
+  fractions and their means and sample SDs.
+- Iteration 0 shares one initial model and initial training pair set across all
+  four methods. Initial grade counts are reconstructed from the saved initial
+  pair CSVs using the same endpoint-deduplication rule.
+- Colors are blue (`original`), red (`random`), yellow (`predictive_entropy`),
+  and green (`pair_bald`). No all-data baseline is invented or added.
+
+The required inputs are:
+
+1. `performance.csv` from the all-fold runner, containing every requested round,
+   all four methods, and all five folds for the chosen seed.
+2. `initial_performance.csv` from evaluation of the initial models on **test**
+   images, with `method=initial` and `round=0` for all five folds. The automatic
+   `initial_predictions/` directory created by script 11 contains training-only
+   predictions and is not a substitute for these test results.
+3. The saved initial training pair CSVs and the requested iterations' saved
+   `mayo_grade_distribution.csv` files with completed selection manifests.
+
+If the initial test predictions already exist under
+`initial_test_predictions/seed_240119/fold_<fold>/`, evaluate them with the existing
+script 10 as follows. This step does not predict again or require a GPU. If they
+were saved elsewhere, set `INITIAL_TEST_ROOT` to that actual directory first.
+If test predictions do not exist yet, generate them from the saved initial
+checkpoints using script 9 before this step; do not substitute a later model.
+
+```bash
+cd /home/mil/n-inoue/Deep-Bayesian-Active-Learning-to-Rank/Experiments/Ranknet/Bayesian/LIMUC/Scripts
+
+export LIMUC_DATA_ROOT=/data/umeiro0/patient_based_classified_images
+EXPERIMENT_DIR=${LIMUC_DATA_ROOT}/generated/PairBALDExperiments/pair_bald_all_folds
+INITIAL_PAIRS_ROOT=${LIMUC_DATA_ROOT}/generated/Add_dataset/LIMUC_AL_001/AL_0
+SEED=240119
+INITIAL_TEST_ROOT=${EXPERIMENT_DIR}/initial_test_predictions/seed_${SEED}
+
+for FOLD in 1 2 3 4 5; do
+    uv run --frozen --no-sync 10_evaluate_pair_experiment.py \
+        --prediction-summary-csv "${INITIAL_TEST_ROOT}/fold_${FOLD}/test_mean_score_and_uncertainty.csv" \
+        --cumulative-pair-csv "${INITIAL_PAIRS_ROOT}/fold_${FOLD}/RBS/${FOLD}_train_pair_RBS.csv" \
+        --output-csv "${EXPERIMENT_DIR}/initial_performance.csv" \
+        --experiment-id pair_bald_all_folds \
+        --method initial --fold "${FOLD}" --seed "${SEED}" --round 0 || break
+done
+```
+
+If the initial evaluation CSV is already complete, skip the preceding loop.
+Create the figures and tables with one command:
+
+```bash
+uv run --frozen --no-sync 12_plot_pair_experiments.py \
+    --data-root "${LIMUC_DATA_ROOT}" \
+    --experiment-dir "${EXPERIMENT_DIR}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --initial-performance-csv "${EXPERIMENT_DIR}/initial_performance.csv" \
+    --seed "${SEED}" \
+    --max-round 8 \
+    --bar-rounds 0,3,6,8 \
+    --output-dir "${EXPERIMENT_DIR}/plots_fig4_fig6_v1"
+```
+
+The command requires all five folds, rejects duplicate evaluation rows and
+unequal method budgets within a fold/round, and never interpolates missing
+results. If round 8 is not complete yet, wait for it or explicitly request only
+available rounds, for example `--max-round 6 --bar-rounds 0,3,6`. A missing-input
+error names the CSV or the missing method/round/fold combinations. The report
+directory is created only after all input tables have been validated. Existing
+report directories are never overwritten; use a new name such as
+`plots_fig4_fig6_v2` for another run.
+
+The output directory contains:
+
+| File | Contents |
+| --- | --- |
+| `figure4_overall.png`, `.pdf` | Overall accuracy curves with SD bands |
+| `figure4_neighboring.png`, `.pdf` | Neighboring accuracy curves with SD bands |
+| `figure6_iteration_0.png`, `.pdf` | Shared initial grade counts |
+| `figure6_iteration_3.png`, `.pdf` | Cumulative grade counts at iteration 3 |
+| `figure6_iteration_6.png`, `.pdf` | Cumulative grade counts at iteration 6 |
+| `figure6_iteration_8.png`, `.pdf` | Cumulative grade counts at iteration 8 |
+| `figure4_fold_data.csv` | Per-fold results, nominal ratios, actual pair budgets, and accuracies |
+| `figure4_summary.csv` | Five-fold means and sample SDs; accuracy values are percentages |
+| `figure6_fold_data.csv` | Per-fold counts, fractions, and source CSV paths |
+| `figure6_summary.csv` | Five-fold count/fraction means and sample SDs |
+| `plot_config.json` | Input paths, seed, colors, and aggregation definitions |
+
+Check that `fold_count` is 5 in both summary CSVs. At iteration 0 all methods
+must have the same accuracy and grade counts; at later iterations they may
+differ. The plotter does not pool results from different seeds or experiments.
+Override `--performance-csv` or `--initial-performance-csv` if those tables are
+stored outside the default experiment directory.
+
 ## Citation
 
 If you use this code in your research, please cite:
