@@ -178,13 +178,45 @@ def test_plots_have_requested_colors_bands_and_sixteen_bars(plotter, saved_resul
             ).max()
         )
     plotter.plt.close(figure)
-    figure = plotter.plot_grades(plotter.summarize_grades(grades), 8, 40)
+    figure = plotter.plot_grades(plotter.summarize_grades(grades), 8)
     assert len(figure.axes[0].patches) == 16
     for index, color in enumerate(plotter.METHOD_COLORS.values()):
         assert all(
             colors.to_hex(bar.get_facecolor()) == color
             for bar in figure.axes[0].patches[index * 4 : (index + 1) * 4]
         )
+    plotter.plt.close(figure)
+
+
+@pytest.mark.parametrize("round_number", [0, 3, 6, 8])
+def test_grade_bars_show_mean_within_fold_percentages(
+    plotter, saved_results, round_number
+):
+    """Normalize each fold first, preserve zero grades, and sum to 100% per method."""
+    _, grades = plotter.load_report_data(saved_results)
+    summary = plotter.summarize_grades(grades)
+    figure = plotter.plot_grades(summary, round_number)
+    axis = figure.axes[0]
+    assert axis.get_ylim() == (0, 100)
+    assert axis.get_ylabel() == "Mean proportion of unique images (%)"
+    for index, method in enumerate(plotter.METHOD_COLORS):
+        heights = [
+            bar.get_height() for bar in axis.patches[index * 4 : (index + 1) * 4]
+        ]
+        expected = (
+            grades.loc[(grades.method == method) & (grades["round"] == round_number)]
+            .groupby("MayoLabel")["unique_image_fraction"]
+            .mean()
+            * 100
+        )
+        np.testing.assert_allclose(heights, expected.to_numpy(), rtol=0, atol=1e-12)
+        assert sum(heights) == pytest.approx(100)
+        if round_number == 0:
+            assert heights == pytest.approx([25] * 4)
+        else:
+            assert heights[2] == 0
+            pooled_percentage = 13 / (13 + 26 + 4) * 100
+            assert abs(heights[0] - pooled_percentage) > 1e-6
     plotter.plt.close(figure)
 
 
@@ -306,6 +338,8 @@ def test_cli_produces_tables_pngs_pdfs_and_metadata_without_tensorflow(saved_res
     assert metadata["folds"] == [1, 2, 3, 4, 5]
     assert "ddof=1" in metadata["accuracy_band"]
     assert "cumulative training pairs" in metadata["grade_population"]
+    assert "within-fold grade fractions" in metadata["grade_axis"]
+    assert metadata["grade_axis_limits_percent"] == [0, 100]
 
 
 @pytest.mark.parametrize(

@@ -621,9 +621,9 @@ selection methods. It reads CSVs only: no TensorFlow import, GPU, prediction,
 training, or changes to saved experiment results are needed. Run it after the
 requested rounds have finished, not while their CSVs are being written.
 
-The aggregation follows the axes and five-fold averaging in Sections 5.1.5 and
-5.1.6 of the [paper](https://arxiv.org/html/2409.04952v1), with the following
-explicit conventions for this comparison:
+The comparison uses five-fold averaging as in Sections 5.1.5 and 5.1.6 of the
+[paper](https://arxiv.org/html/2409.04952v1), with the following explicit
+conventions. Figure 6 uses percentages instead of the paper's raw image counts:
 
 - Figure 4: two line charts, `overall` and `neighboring`. Each point is the
   equally weighted mean test accuracy of folds 1–5. The shaded band is mean ±
@@ -639,13 +639,17 @@ explicit conventions for this comparison:
   `--round-labeling-percent`; these options change labels, not the experiment.
 - Figure 6: four grouped bar charts for iterations 0, 3, 6, and 8. Each Mayo
   grade has four method bars. Heights are the equally weighted five-fold mean
-  **number of unique images**, not class percentages or endpoint appearance
-  counts. Later iterations read the saved `mayo_grade_distribution.csv` in each
+  **proportion of unique images (%)**. For each fold, divide a grade's unique
+  image count by the total unique images across all four grades, then average
+  these fractions across folds and multiply by 100. Do not pool counts before
+  normalization: folds with more images must not receive greater weight. Later
+  iterations read the saved `mayo_grade_distribution.csv` in each
   selection directory. These files count both endpoints of cumulative training
   pairs, deduplicated within each fold; partner-only images are included. This
   distinction matters when partners can come from the entire training split.
-  All four charts share the same y-axis scale. The tables also include fold-wise
-  fractions and their means and sample SDs.
+  All four charts use a 0–100% y-axis scale, and the four grade bars sum to 100%
+  for each method in each chart. The tables retain image counts as well as
+  fractions on a 0–1 scale and their means and sample SDs.
 - Iteration 0 shares one initial model and initial training pair set across all
   four methods. Initial grade counts are reconstructed from the saved initial
   pair CSVs using the same endpoint-deduplication rule.
@@ -719,10 +723,10 @@ The output directory contains:
 | --- | --- |
 | `figure4_overall.png`, `.pdf` | Overall accuracy curves with SD bands |
 | `figure4_neighboring.png`, `.pdf` | Neighboring accuracy curves with SD bands |
-| `figure6_iteration_0.png`, `.pdf` | Shared initial grade counts |
-| `figure6_iteration_3.png`, `.pdf` | Cumulative grade counts at iteration 3 |
-| `figure6_iteration_6.png`, `.pdf` | Cumulative grade counts at iteration 6 |
-| `figure6_iteration_8.png`, `.pdf` | Cumulative grade counts at iteration 8 |
+| `figure6_iteration_0.png`, `.pdf` | Shared initial grade proportions (%) |
+| `figure6_iteration_3.png`, `.pdf` | Cumulative grade proportions (%) at iteration 3 |
+| `figure6_iteration_6.png`, `.pdf` | Cumulative grade proportions (%) at iteration 6 |
+| `figure6_iteration_8.png`, `.pdf` | Cumulative grade proportions (%) at iteration 8 |
 | `figure4_fold_data.csv` | Per-fold results, nominal ratios, actual pair budgets, and accuracies |
 | `figure4_summary.csv` | Five-fold means and sample SDs; accuracy values are percentages |
 | `figure6_fold_data.csv` | Per-fold counts, fractions, and source CSV paths |

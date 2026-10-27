@@ -297,8 +297,8 @@ def plot_accuracy(summary: pd.DataFrame, metric: str):
     return figure
 
 
-def plot_grades(summary: pd.DataFrame, round_number: int, upper_limit: float):
-    """Draw four method bars per Mayo grade using a shared scale across iterations."""
+def plot_grades(summary: pd.DataFrame, round_number: int):
+    """Draw mean per-fold grade percentages on a shared 0–100% scale."""
     figure, axis = plt.subplots(figsize=(7, 4.5))
     width = 0.19
     x = np.arange(4)
@@ -308,7 +308,7 @@ def plot_grades(summary: pd.DataFrame, round_number: int, upper_limit: float):
         ].sort_values("MayoLabel")
         axis.bar(
             x + (index - 1.5) * width,
-            values["unique_image_count_mean"],
+            values["unique_image_fraction_mean"] * 100,
             width=width,
             color=color,
             label=method,
@@ -316,9 +316,9 @@ def plot_grades(summary: pd.DataFrame, round_number: int, upper_limit: float):
     axis.set_xticks(x)
     axis.set_xticklabels(["Mayo 0", "Mayo 1", "Mayo 2", "Mayo 3"])
     axis.set_xlabel("Mayo grade")
-    axis.set_ylabel("Mean number of unique images (5 folds)")
+    axis.set_ylabel("Mean proportion of unique images (%)")
     axis.set_title(f"Iteration {round_number}")
-    axis.set_ylim(0, upper_limit)
+    axis.set_ylim(0, 100)
     axis.grid(axis="y", alpha=0.25)
     axis.set_axisbelow(True)
     axis.legend(fontsize=9)
@@ -348,9 +348,8 @@ def save_report(args) -> None:
         for extension in ("png", "pdf"):
             figure.savefig(args.output_dir / f"figure4_{metric}.{extension}", dpi=300)
         plt.close(figure)
-    upper_limit = float(grade_summary["unique_image_count_mean"].max()) * 1.18
     for round_number in args.bar_rounds:
-        figure = plot_grades(grade_summary, round_number, upper_limit)
+        figure = plot_grades(grade_summary, round_number)
         for extension in ("png", "pdf"):
             figure.savefig(
                 args.output_dir / f"figure6_iteration_{round_number}.{extension}",
@@ -364,6 +363,8 @@ def save_report(args) -> None:
         "accuracy_band": "unweighted five-fold mean +/- sample SD (ddof=1), percentage points; not a confidence interval",
         "labeling_ratio": "nominal initial_labeling_percent + round_labeling_percent * round; not unique-image coverage",
         "grade_population": "unique images in either endpoint of cumulative training pairs; each image counted once per fold",
+        "grade_axis": "unweighted five-fold mean of within-fold grade fractions, multiplied by 100; not pooled counts",
+        "grade_axis_limits_percent": [0, 100],
         "initial_model": "shared initial performance and training pairs copied across methods at round 0",
         "tie_policy": "same-grade pairs excluded from overall and neighboring directional accuracies by the existing evaluator",
         "paper_reference": "https://arxiv.org/html/2409.04952v1 (Sections 5.1.5 and 5.1.6; Figures 4 and 6)",
