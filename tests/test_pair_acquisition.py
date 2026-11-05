@@ -1,6 +1,7 @@
 """Tests for label-free pair acquisition and RankNet oracle generation."""
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,218 @@ def load_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture
+def selection_script():
+    """Load the selection entry point without importing TensorFlow."""
+    sys.path.insert(0, str(SCRIPT_DIR))
+    spec = importlib.util.spec_from_file_location(
+        "select_comparison_pairs", SCRIPT_DIR / "7_select_comparison_pairs.py"
+    )
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    return script
+
+
+@pytest.fixture
+def final_round_args(tmp_path, selection_script, monkeypatch):
+    """Create two remaining dummy anchors with a usual three-comparison budget."""
+    image_ids = [f"dummy_{index:02}" for index in range(10)]
+    train_csv = tmp_path / "train.csv"
+    previous_csv = tmp_path / "previous.csv"
+    history_csv = tmp_path / "history.csv"
+    uncertainty_csv = tmp_path / "uncertainty.csv"
+    pd.DataFrame(
+        {
+            "filename": image_ids,
+            "MayoLabel": [index % 4 for index in range(10)],
+        }
+    ).to_csv(train_csv, index=False)
+    pd.DataFrame(
+        {
+            "x1_image": [image_ids[0]],
+            "x2_image": [image_ids[1]],
+            "x1_label": [0],
+            "x2_label": [1],
+            "relative_label": [0],
+        }
+    ).to_csv(previous_csv, index=False)
+    pd.DataFrame({"filename": image_ids[:8]}).to_csv(history_csv, index=False)
+    pd.DataFrame(
+        {
+            "filename": image_ids,
+            "var_score": list(range(10)),
+        }
+    ).to_csv(uncertainty_csv, index=False)
+    scores = {
+        image_id: np.array([index / 10, -index / 5, index + 1], dtype=float)
+        for index, image_id in enumerate(image_ids)
+    }
+    monkeypatch.setattr(
+        selection_script, "load_score_mapping", lambda *args: (scores, 0.0, False)
+    )
+    return SimpleNamespace(
+        experiment_root=tmp_path / "experiments",
+        experiment_id="dummy_final_round",
+        diagnostic=False,
+        method="random",
+        seed=5,
+        round_number=16,
+        fold=3,
+        resume=False,
+        train_csv=train_csv,
+        previous_pair_csv=previous_csv,
+        anchor_history_csv=history_csv,
+        anchor_csv=None,
+        uncertainty_csv=uncertainty_csv,
+        anchor_count=None,
+        anchor_rate=0.3,
+        candidate_scope=None,
+        pair_budget=None,
+        allow_cpu_smoke_test=False,
+        cpu_smoke_max_images=16,
+        cuda_visible_devices="0",
+        mc_cache=None,
+        checkpoint=None,
+        image_dir=tmp_path,
+        mc_samples=3,
+        image_batch_size=1,
+        candidate_chunk_size=2,
+        negative_bald_tolerance=1e-12,
+        partner_cap=0,
+    )
+
+
+@pytest.mark.parametrize(
+    "method", ["original", "random", "predictive_entropy", "pair_bald"]
+)
+@pytest.mark.parametrize("pair_budget", [None, 5])
+def test_final_round_keeps_pair_budget_and_resumes_without_duplicates(
+    selection_script, final_round_args, method, pair_budget, capsys
+):
+    """A smaller final anchor set must not reduce any method's annotation budget."""
+    args = final_round_args
+    args.method = method
+    args.pair_budget = pair_budget
+    expected_budget = 3 if pair_budget is None else pair_budget
+    selection_script.run_selection(args)
+    directory = selection_script.output_directory(args)
+    anchors = pd.read_csv(directory / "new_anchors.csv")
+    assert anchors.filename.tolist() == ["dummy_09", "dummy_08"]
+    pairs = pd.read_csv(directory / "new_pairs.csv")
+    assert len(pairs) == expected_budget
+    assert set(pairs.x1_image) == set(anchors.filename)
+    assert (pairs.x1_image != pairs.x2_image).all()
+    cumulative = pd.read_csv(directory / "cumulative_pairs.csv")
+    assert len(cumulative) == expected_budget + 1
+    assert len(selection_script.acquired_pair_keys(cumulative)) == len(cumulative)
+    history = pd.read_csv(directory / "cumulative_anchors.csv")
+    assert history.filename.nunique() == len(history) == 10
+    configuration = json.loads((directory / "experiment_config.json").read_text())
+    assert configuration["requested_anchor_count"] == 3
+    assert configuration["anchor_count"] == 2
+    assert configuration["remaining_anchor_count_before_selection"] == 2
+    assert configuration["anchor_count_adjusted"] is True
+    assert configuration["pair_budget"] == expected_budget
+    assert f"new-pair budget remains {expected_budget}" in capsys.readouterr().out
+
+    before = (directory / "cumulative_pairs.csv").read_bytes()
+    args.resume = True
+    selection_script.run_selection(args)
+    assert (directory / "cumulative_pairs.csv").read_bytes() == before
+
+
+def test_explicit_anchor_shortage_is_not_silently_adjusted(
+    selection_script, final_round_args
+):
+    """An explicit request for three anchors must fail when only two remain."""
+    final_round_args.anchor_count = 3
+    with pytest.raises(
+        RuntimeError, match="Requested 3 new anchors, but only 2 remain"
+    ):
+        selection_script.run_selection(final_round_args)
+    assert not selection_script.output_directory(final_round_args).exists()
+
+
+def test_no_remaining_anchors_stops_without_creating_output(
+    selection_script, final_round_args
+):
+    """Never recycle old anchors or begin MC inference after exhausting the split."""
+    args = final_round_args
+    train = pd.read_csv(args.train_csv)
+    train[["filename"]].to_csv(args.anchor_history_csv, index=False)
+    with pytest.raises(RuntimeError, match="No new anchors remain"):
+        selection_script.run_selection(args)
+    assert not selection_script.output_directory(args).exists()
+
+
+def test_final_round_preserves_budget_coverage_constraints(
+    selection_script, final_round_args
+):
+    """Anchor truncation must not permit a budget too small to cover the remainder."""
+    final_round_args.pair_budget = 1
+    with pytest.raises(RuntimeError, match="each anchor"):
+        selection_script.run_selection(final_round_args)
+    assert not selection_script.output_directory(final_round_args).exists()
+
+
+def test_final_round_stops_when_unique_pairs_cannot_fill_budget(
+    selection_script, final_round_args
+):
+    """Do not shrink budgets or repeat pairs to satisfy a small candidate scope."""
+    final_round_args.candidate_scope = "selected"
+    with pytest.raises(RuntimeError, match="Cannot cover every anchor"):
+        selection_script.run_selection(final_round_args)
+    assert not selection_script.output_directory(final_round_args).exists()
+
+
+def test_explicit_anchor_csv_keeps_its_own_default_budget(
+    selection_script, final_round_args, tmp_path
+):
+    """Diagnostic anchors must not inherit the unrelated rate-based budget."""
+    path = tmp_path / "anchors.csv"
+    pd.DataFrame({"filename": ["dummy_09"]}).to_csv(path, index=False)
+    final_round_args.anchor_csv = path
+    selection_script.run_selection(final_round_args)
+    directory = selection_script.output_directory(final_round_args)
+    assert len(pd.read_csv(directory / "new_pairs.csv")) == 1
+    configuration = json.loads((directory / "experiment_config.json").read_text())
+    assert configuration["requested_anchor_count"] == 1
+    assert configuration["anchor_count_adjusted"] is False
+
+
+def test_ordinary_rate_selection_and_uncertainty_order_are_unchanged(
+    selection_script, final_round_args
+):
+    """Keep the usual count, stable ties, and history exclusions before exhaustion."""
+    args = final_round_args
+    train = pd.read_csv(args.train_csv)
+    uncertainty = pd.read_csv(args.uncertainty_csv)
+    uncertainty["var_score"] = 1
+    history = train[["filename"]].iloc[:2]
+    anchors = selection_script.select_anchor_images(
+        train.filename.tolist(), uncertainty, history, None, args.anchor_rate
+    )
+    assert anchors.filename.tolist() == ["dummy_02", "dummy_03", "dummy_04"]
+
+
+def test_rate_selection_handles_339_requested_and_333_remaining(selection_script):
+    """Reproduce the reported boundary using only synthetic IDs and uncertainty."""
+    image_ids = [f"dummy_{index:05}" for index in range(6780)]
+    uncertainty = pd.DataFrame(
+        {
+            "filename": image_ids,
+            "var_score": np.arange(len(image_ids), dtype=float),
+        }
+    )
+    history = pd.DataFrame({"filename": image_ids[:-333]})
+    assert round(len(image_ids) * 0.05) == 339
+    anchors = selection_script.select_anchor_images(
+        image_ids, uncertainty, history, None, 0.05
+    )
+    assert len(anchors) == 333
+    assert anchors.filename.tolist() == image_ids[-333:][::-1]
 
 
 def test_bald_is_zero_when_all_model_samples_agree() -> None:

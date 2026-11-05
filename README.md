@@ -330,9 +330,30 @@ uv run --frozen --no-sync 7_select_comparison_pairs.py \
 Replace `METHOD` with `original`, `random`, or `predictive_entropy`; set
 `CANDIDATE_SCOPE=cumulative_selected` for `original`. Use the same `--pair-budget`
 for every method. The command stops if that budget cannot give every selected
-anchor at least one new valid pair. Omitting `--pair-budget` sets it to the number
-of selected anchors. The default `--mc-samples` is 30. The additional `selected`
+anchor at least one new valid pair. Omitting `--pair-budget` sets it to the
+requested anchor count, before any final-round adjustment described below.
+The default `--mc-samples` is 30. The additional `selected`
 scope restricts partners to the current round's anchors for diagnostics.
+
+When using the automatic `--anchor-rate`, integer rounding can leave fewer new
+anchors than the usual per-round count near the end of acquisition. That last
+round selects all remaining anchors, still ordered by image uncertainty, but
+**keeps the comparison budget unchanged**. For example, if the rate requests 339
+anchors and only 333 remain, select those 333 and acquire 339 new pairs. Every
+anchor receives a pair in the first pass; the remaining six comparisons follow
+the existing partner-selection rule. Partners still come from the configured
+candidate scope, and self-pairs, acquired pairs, reverse duplicates, and partner
+caps remain enforced. Earlier-round anchors are not added to the new-anchor
+set, and acquired pairs are not reacquired to fill the budget.
+
+Explicit `--anchor-count` requests remain strict and are never shortened.
+With `--anchor-csv`, the default budget is the number of distinct supplied
+anchors. An explicit `--pair-budget` always remains unchanged. The selector
+stops if no new anchors remain or if the exact pair budget and coverage
+constraints cannot be satisfied. The rate-based adjustment is printed and
+recorded in `experiment_config.json` and `.csv` as `requested_anchor_count`,
+`anchor_count`, `remaining_anchor_count_before_selection`, and
+`anchor_count_adjusted`, alongside the actual `pair_budget`.
 
 Train every method from the same saved AL_0 checkpoint. The validation pair CSV is
 fixed rather than actively expanded.
@@ -572,6 +593,8 @@ Training always loads the same saved AL_0 checkpoint, as in single-fold executio
 `--patience`, and `--learning-rate` are applied identically to every fold/method.
 The default budgets remain fold-dependent because the default anchor count is 5%
 of that fold's training images; methods within a fold share the same budget.
+The final-round anchor adjustment does not reduce this budget, so the same
+rule applies to all four methods. Completed rounds are preserved by `--resume`.
 Use `--methods pair_bald` for only that method, or `--folds 1,2` for a subset.
 
 For completed outputs, add `--resume` to the same command:

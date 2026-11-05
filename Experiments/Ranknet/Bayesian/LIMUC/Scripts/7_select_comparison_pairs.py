@@ -59,7 +59,11 @@ def select_anchor_images(
     anchor_count,
     anchor_rate,
 ):
-    """Apply the existing image-level uncertainty rule to new anchors.
+    """Apply image-level uncertainty selection, allowing a partial final round.
+
+    Rate-based selection uses all remaining anchors when fewer than the usual
+    count remain. Explicit counts stay strict. Comparison budgets are resolved
+    separately so that selecting fewer anchors does not reduce annotation cost.
 
     Args:
         train_ids: Fold-specific training image IDs.
@@ -70,6 +74,9 @@ def select_anchor_images(
 
     Returns:
         pd.DataFrame: Newly selected anchors in deterministic acquisition order.
+
+    Raises:
+        RuntimeError: If no new anchors remain or an explicit count is infeasible.
     """
     train_id_set = set(train_ids)
     uncertainty = uncertainty_data[["filename", "var_score"]].copy()
@@ -89,13 +96,18 @@ def select_anchor_images(
         if anchor_count is not None
         else max(1, round(len(train_ids) * anchor_rate))
     )
-    if requested > len(remaining):
+    if remaining.empty:
+        raise RuntimeError(
+            "No new anchors remain in the fold training split. "
+            "Cannot start another acquisition round without reselecting anchors."
+        )
+    if anchor_count is not None and requested > len(remaining):
         raise RuntimeError(
             f"Requested {requested} new anchors, but only {len(remaining)} remain."
         )
     return (
         remaining.sort_values(["var_score", "filename"], ascending=[False, True])
-        .head(requested)
+        .head(min(requested, len(remaining)))
         .reset_index(drop=True)
     )
 
@@ -271,7 +283,13 @@ def run_selection(args):
     if args.anchor_csv is not None:
         anchor_data = read_csv(args.anchor_csv, {"filename"}, "Explicit anchor CSV")
         anchors = explicit_anchor_images(train_ids, anchor_data)
+        requested_anchor_count = len(anchors)
     else:
+        requested_anchor_count = (
+            args.anchor_count
+            if args.anchor_count is not None
+            else max(1, round(len(train_ids) * args.anchor_rate))
+        )
         uncertainty_data = read_csv(
             args.uncertainty_csv,
             {"filename", "var_score"},
@@ -304,7 +322,15 @@ def run_selection(args):
     else:
         candidate_ids = train_ids
 
-    pair_budget = args.pair_budget if args.pair_budget is not None else len(anchor_ids)
+    pair_budget = (
+        args.pair_budget if args.pair_budget is not None else requested_anchor_count
+    )
+    if len(anchor_ids) < requested_anchor_count:
+        print(
+            f"Only {len(anchor_ids)} new anchors remain; selecting all of them "
+            f"instead of the usual {requested_anchor_count}. "
+            f"The new-pair budget remains {pair_budget}."
+        )
     if args.allow_cpu_smoke_test and len(train_ids) > args.cpu_smoke_max_images:
         raise RuntimeError(
             "CPU smoke mode is limited to "
@@ -421,7 +447,12 @@ def run_selection(args):
         "candidate_scope": candidate_scope,
         "candidate_chunk_size": args.candidate_chunk_size,
         "anchor_rate": args.anchor_rate,
+        "requested_anchor_count": requested_anchor_count,
         "anchor_count": len(anchor_ids),
+        "remaining_anchor_count_before_selection": len(
+            train_id_set - set(anchor_history["filename"].astype(str))
+        ),
+        "anchor_count_adjusted": len(anchor_ids) < requested_anchor_count,
         "pair_budget": pair_budget,
         "partner_cap": args.partner_cap,
         "prediction_seconds": prediction_seconds,
