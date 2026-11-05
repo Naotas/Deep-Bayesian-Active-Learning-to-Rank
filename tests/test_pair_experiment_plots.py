@@ -114,6 +114,158 @@ def saved_results(tmp_path, plotter):
     return args
 
 
+@pytest.fixture
+def reference_results(tmp_path, plotter, saved_results):
+    """Add a separate seed's full-budget random reference, without extra training."""
+    directory = tmp_path / "pair_bald_all_folds_seed_240121"
+    directory.mkdir()
+    reference = pd.DataFrame(
+        [
+            {
+                "experiment_id": directory.name,
+                "seed": 240121,
+                "method": "random",
+                "round": 16,
+                "fold": fold,
+                "cumulative_pair_count": 320 + fold,
+                "all_accuracy": 0.79 + fold * 0.02,
+                "neighbor_accuracy": 0.57 + fold * 0.04,
+            }
+            for fold in plotter.FOLDS
+        ]
+    )
+    reference.to_csv(directory / "performance.csv", index=False)
+    saved_results.reference_performance_csv = directory / "performance.csv"
+    saved_results.reference_round = 16
+    return saved_results
+
+
+@pytest.mark.parametrize("metric,expected", [("overall", 85), ("neighboring", 69)])
+def test_reference_is_black_dotted_five_fold_metric_mean(
+    plotter, reference_results, metric, expected
+):
+    """Use separate metric means and keep a reference outside the curve range visible."""
+    performance, _ = plotter.load_report_data(reference_results)
+    reference = plotter.read_reference_performance(reference_results)
+    figure = plotter.plot_accuracy(
+        plotter.summarize_performance(performance), metric, reference
+    )
+    axis = figure.axes[0]
+    assert len(axis.lines) == 5
+    assert len(axis.collections) == 4
+    line = axis.lines[-1]
+    assert colors.to_hex(line.get_color()) == "#000000"
+    assert line.get_linestyle() == ":"
+    assert line.get_ydata() == pytest.approx([expected, expected])
+    assert line.get_xdata() == [0, 1]
+    assert "random 100% (seed 240121)" in line.get_label()
+    assert axis.get_ylim()[0] < expected < axis.get_ylim()[1]
+    assert axis.get_xticks().tolist() == list(range(20, 61, 5))
+    plotter.plt.close(figure)
+
+
+def test_reference_filters_seed_experiment_method_and_round(plotter, reference_results):
+    """Never mix curve seeds, other methods, or neighboring rounds into the reference."""
+    path = reference_results.reference_performance_csv
+    data = pd.read_csv(path)
+    unrelated = [
+        data.assign(seed=240119),
+        data.assign(experiment_id="other_experiment"),
+        data.assign(method="pair_bald"),
+        data.assign(round=15),
+    ]
+    pd.concat([data, *unrelated], ignore_index=True).to_csv(path, index=False)
+    reference = plotter.read_reference_performance(reference_results)
+    assert len(reference) == 5
+    assert reference.all_accuracy.mean() == pytest.approx(0.85)
+    assert reference.neighbor_accuracy.mean() == pytest.approx(0.69)
+    assert set(reference.seed) == {240121}
+    assert set(reference.nominal_labeling_percent) == {100}
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "missing_fold",
+        "duplicate",
+        "nan",
+        "infinity",
+        "accuracy_range",
+        "budget",
+        "wrong_seed",
+        "missing_csv",
+    ],
+)
+def test_invalid_reference_stops_before_creating_report(
+    plotter, reference_results, problem
+):
+    """Do not substitute a different round or silently average partial reference folds."""
+    path = reference_results.reference_performance_csv
+    data = pd.read_csv(path)
+    if problem == "missing_fold":
+        data = data.loc[data.fold != 5]
+    elif problem == "duplicate":
+        data = pd.concat([data, data.iloc[[0]]], ignore_index=True)
+    elif problem == "nan":
+        data.loc[0, "all_accuracy"] = np.nan
+    elif problem == "infinity":
+        data.loc[0, "neighbor_accuracy"] = np.inf
+    elif problem == "accuracy_range":
+        data.loc[0, "all_accuracy"] = 85
+    elif problem == "budget":
+        data.loc[0, "cumulative_pair_count"] = 1.5
+    elif problem == "wrong_seed":
+        data["seed"] = 240119
+    else:
+        reference_results.reference_performance_csv = path.with_name("missing.csv")
+    data.to_csv(path, index=False)
+    with pytest.raises((ValueError, FileNotFoundError)):
+        plotter.save_report(reference_results)
+    assert not reference_results.output_dir.exists()
+
+
+@pytest.mark.parametrize("initial,increment,expected", [(20, 5, 16), (10, 10, 9)])
+def test_reference_round_comes_from_nominal_budget(
+    plotter, tmp_path, initial, increment, expected
+):
+    """Allow a reference beyond the curve's final round without requiring other methods there."""
+    args = plotter.parse_args(
+        [
+            "--experiment-dir",
+            str(tmp_path / "curve_experiment"),
+            "--output-dir",
+            str(tmp_path / "report"),
+            "--reference-performance-csv",
+            str(tmp_path / "performance.csv"),
+            "--initial-labeling-percent",
+            str(initial),
+            "--round-labeling-percent",
+            str(increment),
+        ]
+    )
+    assert args.max_round == 8
+    assert args.reference_seed == 240121
+    assert args.reference_experiment_id == "pair_bald_all_folds_seed_240121"
+    assert args.reference_round == expected
+
+
+def test_reference_rejects_noninteger_full_budget_round(plotter, tmp_path):
+    """Do not select the nearest round when none corresponds to nominal 100%."""
+    with pytest.raises(SystemExit):
+        plotter.parse_args(
+            [
+                "--experiment-dir",
+                str(tmp_path),
+                "--output-dir",
+                str(tmp_path / "report"),
+                "--reference-performance-csv",
+                str(tmp_path / "performance.csv"),
+                "--round-labeling-percent",
+                "7",
+            ]
+        )
+
+
 def test_fold_means_sample_sd_nominal_axis_and_shared_initial(plotter, saved_results):
     """Use fold-wise mean ± sample SD and a common iteration-zero baseline."""
     performance, _ = plotter.load_report_data(saved_results)
@@ -307,27 +459,39 @@ def test_existing_report_is_preserved(plotter, saved_results):
     assert sentinel.read_text() == "dummy existing output"
 
 
-def test_cli_produces_tables_pngs_pdfs_and_metadata_without_tensorflow(saved_results):
+@pytest.mark.parametrize("include_reference", [False, True])
+def test_cli_produces_tables_pngs_pdfs_and_metadata_without_tensorflow(
+    saved_results, reference_results, include_reference
+):
     """Exercise the terminal entry point with only dummy results and CPU plotting."""
     original_csv = saved_results.performance_csv.read_bytes()
+    command = [
+        sys.executable,
+        str(SCRIPT_DIR / "12_plot_pair_experiments.py"),
+        "--experiment-dir",
+        str(saved_results.experiment_dir),
+        "--initial-pairs-root",
+        str(saved_results.initial_pairs_root),
+        "--output-dir",
+        str(saved_results.output_dir),
+    ]
+    if include_reference:
+        command.extend(
+            [
+                "--reference-performance-csv",
+                str(reference_results.reference_performance_csv),
+            ]
+        )
+    reference_csv = reference_results.reference_performance_csv.read_bytes()
     result = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT_DIR / "12_plot_pair_experiments.py"),
-            "--experiment-dir",
-            str(saved_results.experiment_dir),
-            "--initial-pairs-root",
-            str(saved_results.initial_pairs_root),
-            "--output-dir",
-            str(saved_results.output_dir),
-        ],
+        command,
         capture_output=True,
         text=True,
         check=True,
     )
     assert "Saved Figure 4/6" in result.stdout
     output = saved_results.output_dir
-    assert len(list(output.glob("*.csv"))) == 4
+    assert len(list(output.glob("*.csv"))) == (6 if include_reference else 4)
     assert len(list(output.glob("*.png"))) == len(list(output.glob("*.pdf"))) == 6
     for path in output.glob("*.pdf"):
         assert path.read_bytes().startswith(b"%PDF")
@@ -340,6 +504,19 @@ def test_cli_produces_tables_pngs_pdfs_and_metadata_without_tensorflow(saved_res
     assert "cumulative training pairs" in metadata["grade_population"]
     assert "within-fold grade fractions" in metadata["grade_axis"]
     assert metadata["grade_axis_limits_percent"] == [0, 100]
+    assert reference_results.reference_performance_csv.read_bytes() == reference_csv
+    if include_reference:
+        reference = pd.read_csv(output / "figure4_reference_fold_data.csv")
+        assert len(reference) == 5
+        summary = pd.read_csv(output / "figure4_reference_summary.csv")
+        assert len(summary) == 1
+        assert summary.iloc[0].overall_accuracy_mean_percent == pytest.approx(85)
+        assert summary.iloc[0].neighboring_accuracy_mean_percent == pytest.approx(69)
+        assert metadata["accuracy_reference"]["seed"] == 240121
+        assert metadata["accuracy_reference"]["round"] == 16
+        assert "not an upper bound" in metadata["accuracy_reference"]["interpretation"]
+    else:
+        assert metadata["accuracy_reference"] is None
 
 
 @pytest.mark.parametrize(

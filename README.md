@@ -654,7 +654,9 @@ conventions. Figure 6 uses percentages instead of the paper's raw image counts:
   four methods. Initial grade counts are reconstructed from the saved initial
   pair CSVs using the same endpoint-deduplication rule.
 - Colors are blue (`original`), red (`random`), yellow (`predictive_entropy`),
-  and green (`pair_bald`). No all-data baseline is invented or added.
+  and green (`pair_bald`). An optional black dotted horizontal reference uses
+  saved `random` results at the configured nominal 100% budget; it is never
+  estimated from earlier rounds or invented when results are missing.
 
 The required inputs are:
 
@@ -717,6 +719,55 @@ directory is created only after all input tables have been validated. Existing
 report directories are never overwritten; use a new name such as
 `plots_fig4_fig6_v2` for another run.
 
+#### Add the seed 240121 random-method 100% reference
+
+If `random` has completed through nominal 100% for all five folds with seed
+240121, pass its saved `performance.csv` to the same plotter. With the default
+20% initial budget and 5% per round, the reference is **round 16**, independently
+of `--max-round 8` for the four method curves. The other methods do not need
+rounds 9–16. For example, plot the seed 240121 curves with its own reference:
+
+```bash
+export LIMUC_DATA_ROOT=/data/umeiro0/patient_based_classified_images
+EXPERIMENT_DIR=${LIMUC_DATA_ROOT}/generated/PairBALDExperiments/pair_bald_all_folds_seed_240121
+REFERENCE_EXPERIMENT_DIR=${LIMUC_DATA_ROOT}/generated/PairBALDExperiments/pair_bald_all_folds_seed_240121
+INITIAL_PAIRS_ROOT=${LIMUC_DATA_ROOT}/generated/Add_dataset/LIMUC_AL_001/AL_0
+SEED=240121
+
+uv run --frozen --no-sync 12_plot_pair_experiments.py \
+    --data-root "${LIMUC_DATA_ROOT}" \
+    --experiment-dir "${EXPERIMENT_DIR}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --seed "${SEED}" \
+    --max-round 8 \
+    --bar-rounds 0,3,6,8 \
+    --reference-performance-csv "${REFERENCE_EXPERIMENT_DIR}/performance.csv" \
+    --reference-experiment-id pair_bald_all_folds_seed_240121 \
+    --reference-seed 240121 \
+    --output-dir "${EXPERIMENT_DIR}/plots_fig4_fig6_random100_v1"
+```
+
+The `overall` line is the equally weighted mean of `all_accuracy` across the
+five reference folds; the `neighboring` line uses `neighbor_accuracy` instead.
+Both are converted to percentages. The legend states the reference seed and
+accuracy. The reference has no shaded band and is included in the y-axis limits
+even if it lies above or below the displayed curves. Figure 6 is unchanged.
+This is an observed random-method reference at nominal 100%, **not a theoretical
+upper bound, an all-possible-pairs result, or proof that all training images
+have appeared**.
+
+To reuse this same reference for seed 240119 or 240120 curves, change
+`EXPERIMENT_DIR` and `SEED` to the desired curve experiment but keep the reference
+path and reference identity unchanged. A copy of the reference CSV can also be
+used, provided its rows retain the matching `experiment_id` and `seed`.
+The defaults for the reference identity are
+`--reference-experiment-id pair_bald_all_folds_seed_240121 --reference-seed 240121`.
+Different experiment names or reference seeds require explicit overrides.
+The plotter requires exactly one valid result for each reference fold 1–5;
+missing or duplicate folds and invalid accuracies stop report creation.
+No training, prediction, or changes to the source CSVs occur. Omitting
+`--reference-performance-csv` keeps the original plots without a reference.
+
 The output directory contains:
 
 | File | Contents |
@@ -729,6 +780,8 @@ The output directory contains:
 | `figure6_iteration_8.png`, `.pdf` | Cumulative grade proportions (%) at iteration 8 |
 | `figure4_fold_data.csv` | Per-fold results, nominal ratios, actual pair budgets, and accuracies |
 | `figure4_summary.csv` | Five-fold means and sample SDs; accuracy values are percentages |
+| `figure4_reference_fold_data.csv` | Optional: five reference folds, actual pair counts, accuracies, and source CSV |
+| `figure4_reference_summary.csv` | Optional: reference means and sample SDs; only means are drawn as dotted lines |
 | `figure6_fold_data.csv` | Per-fold counts, fractions, and source CSV paths |
 | `figure6_summary.csv` | Five-fold count/fraction means and sample SDs |
 | `plot_config.json` | Input paths, seed, colors, and aggregation definitions |

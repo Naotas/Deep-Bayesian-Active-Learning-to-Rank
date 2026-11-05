@@ -100,6 +100,61 @@ def read_performance(path: Path, args, initial: bool = False) -> pd.DataFrame:
     return data.sort_values(identity).reset_index(drop=True)
 
 
+def read_reference_performance(args) -> pd.DataFrame:
+    """Read five random-method folds at the configured nominal 100% budget.
+
+    Args:
+        args: Plot settings with an optional reference CSV and its identity.
+
+    Returns:
+        pd.DataFrame: Reference fold results, or an empty table when disabled.
+
+    Raises:
+        ValueError: If reference folds are missing, duplicated, or invalid.
+    """
+    if args.reference_performance_csv is None:
+        return pd.DataFrame()
+    path = args.reference_performance_csv
+    data = read_table(
+        path,
+        {
+            "experiment_id",
+            "method",
+            "seed",
+            "round",
+            "fold",
+            "cumulative_pair_count",
+            *METRICS.values(),
+        },
+    )
+    validate_numbers(data, {"seed", "fold", "round"}, str(path))
+    data = data.loc[
+        (data["experiment_id"] == args.reference_experiment_id)
+        & (data["seed"] == args.reference_seed)
+        & (data["method"] == "random")
+        & (data["round"] == args.reference_round)
+    ].copy()
+    if data["fold"].duplicated().any():
+        raise ValueError(f"{path}: duplicate reference fold results.")
+    if set(data["fold"]) != set(FOLDS):
+        raise ValueError(
+            f"{path}: reference requires folds 1–5 for experiment "
+            f"{args.reference_experiment_id!r}, random, seed {args.reference_seed}, "
+            f"round {args.reference_round}; found folds {sorted(data['fold'])}."
+        )
+    validate_numbers(data, {"cumulative_pair_count", *METRICS.values()}, str(path))
+    budgets = data["cumulative_pair_count"]
+    if ((budgets < 1) | (budgets % 1 != 0)).any():
+        raise ValueError(f"{path}: reference pair counts must be positive integers.")
+    for metric, column in METRICS.items():
+        if not data[column].between(0, 1).all():
+            raise ValueError(f"{path}: reference {column} must be between 0 and 1.")
+        data[f"{metric}_accuracy_percent"] = data[column] * 100
+    data["nominal_labeling_percent"] = 100
+    data["source_csv"] = str(path)
+    return data.sort_values("fold").reset_index(drop=True)
+
+
 def initial_grade_distribution(pair_path: Path) -> tuple:
     """Count both pair endpoints once per image, as in the saved round CSVs.
 
@@ -271,8 +326,8 @@ def summarize_grades(data: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def plot_accuracy(summary: pd.DataFrame, metric: str):
-    """Draw mean accuracy and a translucent mean ± one sample-SD band."""
+def plot_accuracy(summary: pd.DataFrame, metric: str, reference=None):
+    """Draw accuracy bands and an optional dotted full-budget reference mean."""
     figure, axis = plt.subplots(figsize=(7, 4.5))
     lower_limits = []
     upper_limits = []
@@ -285,6 +340,18 @@ def plot_accuracy(summary: pd.DataFrame, metric: str):
         axis.fill_between(x, mean - sd, mean + sd, color=color, alpha=0.16, linewidth=0)
         lower_limits.extend(mean - sd)
         upper_limits.extend(mean + sd)
+    if reference is not None and not reference.empty:
+        reference_accuracy = reference[METRICS[metric]].mean() * 100
+        reference_seed = int(reference.iloc[0]["seed"])
+        axis.axhline(
+            reference_accuracy,
+            color="black",
+            linestyle=":",
+            linewidth=1.8,
+            label=f"random 100% (seed {reference_seed}): {reference_accuracy:.2f}%",
+        )
+        lower_limits.append(reference_accuracy)
+        upper_limits.append(reference_accuracy)
     axis.set_xticks(sorted(summary["nominal_labeling_percent"].unique()))
     axis.set_ylim(max(0, min(lower_limits) - 2), min(100, max(upper_limits) + 2))
     axis.set_xlabel("Labeling ratio (%)")
@@ -333,6 +400,7 @@ def save_report(args) -> None:
             f"Report output already exists: {args.output_dir}. Choose a new directory."
         )
     performance, grades = load_report_data(args)
+    reference = read_reference_performance(args)
     performance_summary = summarize_performance(performance)
     grade_summary = summarize_grades(grades)
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -343,8 +411,17 @@ def save_report(args) -> None:
         ("figure6_summary", grade_summary),
     ):
         table.to_csv(args.output_dir / f"{name}.csv", index=False)
+    if not reference.empty:
+        reference.to_csv(
+            args.output_dir / "figure4_reference_fold_data.csv", index=False
+        )
+        summarize_performance(reference).assign(
+            experiment_id=args.reference_experiment_id,
+            seed=args.reference_seed,
+            source_csv=str(args.reference_performance_csv),
+        ).to_csv(args.output_dir / "figure4_reference_summary.csv", index=False)
     for metric in METRICS:
-        figure = plot_accuracy(performance_summary, metric)
+        figure = plot_accuracy(performance_summary, metric, reference)
         for extension in ("png", "pdf"):
             figure.savefig(args.output_dir / f"figure4_{metric}.{extension}", dpi=300)
         plt.close(figure)
@@ -366,6 +443,20 @@ def save_report(args) -> None:
         "grade_axis": "unweighted five-fold mean of within-fold grade fractions, multiplied by 100; not pooled counts",
         "grade_axis_limits_percent": [0, 100],
         "initial_model": "shared initial performance and training pairs copied across methods at round 0",
+        "accuracy_reference": (
+            {
+                "source_csv": str(args.reference_performance_csv),
+                "experiment_id": args.reference_experiment_id,
+                "seed": args.reference_seed,
+                "method": "random",
+                "round": args.reference_round,
+                "nominal_labeling_percent": 100,
+                "aggregation": "unweighted five-fold mean for each plot's metric; black dotted horizontal line without an SD band",
+                "interpretation": "observed random-method reference at nominal 100% budget; not an upper bound or proof of unique-image coverage",
+            }
+            if not reference.empty
+            else None
+        ),
         "tie_policy": "same-grade pairs excluded from overall and neighboring directional accuracies by the existing evaluator",
         "paper_reference": "https://arxiv.org/html/2409.04952v1 (Sections 5.1.5 and 5.1.6; Figures 4 and 6)",
     }
@@ -383,6 +474,16 @@ def parse_args(argv=None):
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--performance-csv", type=Path)
     parser.add_argument("--initial-performance-csv", type=Path)
+    parser.add_argument(
+        "--reference-performance-csv",
+        type=Path,
+        help="Optional saved random-method results at nominal 100%%; add black dotted reference lines.",
+    )
+    parser.add_argument(
+        "--reference-experiment-id",
+        default="pair_bald_all_folds_seed_240121",
+    )
+    parser.add_argument("--reference-seed", type=int, default=240121)
     parser.add_argument("--initial-pairs-root", type=Path)
     parser.add_argument("--seed", type=int, default=240119)
     parser.add_argument("--max-round", type=int, default=8)
@@ -416,12 +517,25 @@ def parse_args(argv=None):
         parser.error(
             "Nominal labeling percentages must be positive, finite, and at most 100% at the final round."
         )
+    args.reference_round = None
+    if args.reference_performance_csv is not None:
+        reference_round = (
+            100 - args.initial_labeling_percent
+        ) / args.round_labeling_percent
+        if reference_round < 1 or not np.isclose(
+            reference_round, round(reference_round), rtol=0, atol=1e-9
+        ):
+            parser.error(
+                "The nominal 100% reference must correspond to a positive integer round."
+            )
+        args.reference_round = round(reference_round)
     for name in (
         "data_root",
         "experiment_dir",
         "output_dir",
         "performance_csv",
         "initial_performance_csv",
+        "reference_performance_csv",
         "initial_pairs_root",
     ):
         value = getattr(args, name)
