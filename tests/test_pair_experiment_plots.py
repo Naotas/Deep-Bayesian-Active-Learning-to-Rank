@@ -158,7 +158,7 @@ def test_reference_is_black_dotted_five_fold_metric_mean(
     assert line.get_linestyle() == ":"
     assert line.get_ydata() == pytest.approx([expected, expected])
     assert line.get_xdata() == [0, 1]
-    assert "random 100% (seed 240121)" in line.get_label()
+    assert line.get_label() == "all data"
     assert axis.get_ylim()[0] < expected < axis.get_ylim()[1]
     assert axis.get_xticks().tolist() == list(range(20, 61, 5))
     plotter.plt.close(figure)

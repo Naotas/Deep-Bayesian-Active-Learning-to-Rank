@@ -342,13 +342,12 @@ def plot_accuracy(summary: pd.DataFrame, metric: str, reference=None):
         upper_limits.extend(mean + sd)
     if reference is not None and not reference.empty:
         reference_accuracy = reference[METRICS[metric]].mean() * 100
-        reference_seed = int(reference.iloc[0]["seed"])
         axis.axhline(
             reference_accuracy,
             color="black",
             linestyle=":",
             linewidth=1.8,
-            label=f"random 100% (seed {reference_seed}): {reference_accuracy:.2f}%",
+            label="all data",
         )
         lower_limits.append(reference_accuracy)
         upper_limits.append(reference_accuracy)
