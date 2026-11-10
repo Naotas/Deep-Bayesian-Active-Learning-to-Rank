@@ -183,6 +183,62 @@ def test_reference_filters_seed_experiment_method_and_round(plotter, reference_r
     assert set(reference.nominal_labeling_percent) == {100}
 
 
+def test_one_shot_reference_uses_all_data_round_one(plotter, reference_results):
+    """Read the new baseline without requiring AL rounds 9–16 or another method."""
+    args = reference_results
+    path = args.reference_performance_csv
+    data = pd.read_csv(path)
+    baseline = data.assign(experiment_id="one_shot", method="all_data", round=1)
+    pd.concat([data, baseline.assign(all_accuracy=0.9, neighbor_accuracy=0.8)]).to_csv(
+        path, index=False
+    )
+    parsed = plotter.parse_args(
+        [
+            "--experiment-dir",
+            str(args.experiment_dir),
+            "--output-dir",
+            str(args.output_dir),
+            "--reference-performance-csv",
+            str(path),
+            "--reference-experiment-id",
+            "one_shot",
+            "--reference-method",
+            "all_data",
+        ]
+    )
+    assert parsed.reference_round == 1
+    reference = plotter.read_reference_performance(parsed)
+    assert set(reference.method) == {"all_data"}
+    assert reference.all_accuracy.mean() == pytest.approx(0.9)
+    assert reference.neighbor_accuracy.mean() == pytest.approx(0.8)
+    assert len(reference) == 5
+    parsed.initial_pairs_root = args.initial_pairs_root
+    parsed.seed = args.seed
+    plotter.save_report(parsed)
+    metadata = json.loads((args.output_dir / "plot_config.json").read_text())
+    assert metadata["accuracy_reference"]["method"] == "all_data"
+    assert metadata["accuracy_reference"]["round"] == 1
+
+
+def test_explicit_reference_round_overrides_nominal_mapping(plotter, tmp_path):
+    """A stored one-shot run index need not map to an AL labeling percentage."""
+    args = plotter.parse_args(
+        [
+            "--experiment-dir",
+            str(tmp_path),
+            "--output-dir",
+            str(tmp_path / "report"),
+            "--reference-performance-csv",
+            str(tmp_path / "performance.csv"),
+            "--reference-method",
+            "all_data",
+            "--reference-round",
+            "2",
+        ]
+    )
+    assert args.reference_round == 2
+
+
 @pytest.mark.parametrize(
     "problem",
     [
@@ -527,6 +583,7 @@ def test_cli_produces_tables_pngs_pdfs_and_metadata_without_tensorflow(
         ["--bar-rounds", "0,3,x"],
         ["--round-labeling-percent", "nan"],
         ["--initial-labeling-percent", "90"],
+        ["--reference-round", "0"],
     ],
 )
 def test_invalid_plot_arguments_are_rejected(plotter, tmp_path, extra):

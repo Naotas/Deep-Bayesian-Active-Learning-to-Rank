@@ -101,7 +101,7 @@ def read_performance(path: Path, args, initial: bool = False) -> pd.DataFrame:
 
 
 def read_reference_performance(args) -> pd.DataFrame:
-    """Read five random-method folds at the configured nominal 100% budget.
+    """Read five folds of the explicitly identified full-budget reference.
 
     Args:
         args: Plot settings with an optional reference CSV and its identity.
@@ -131,7 +131,7 @@ def read_reference_performance(args) -> pd.DataFrame:
     data = data.loc[
         (data["experiment_id"] == args.reference_experiment_id)
         & (data["seed"] == args.reference_seed)
-        & (data["method"] == "random")
+        & (data["method"] == args.reference_method)
         & (data["round"] == args.reference_round)
     ].copy()
     if data["fold"].duplicated().any():
@@ -139,7 +139,7 @@ def read_reference_performance(args) -> pd.DataFrame:
     if set(data["fold"]) != set(FOLDS):
         raise ValueError(
             f"{path}: reference requires folds 1–5 for experiment "
-            f"{args.reference_experiment_id!r}, random, seed {args.reference_seed}, "
+            f"{args.reference_experiment_id!r}, {args.reference_method}, seed {args.reference_seed}, "
             f"round {args.reference_round}; found folds {sorted(data['fold'])}."
         )
     validate_numbers(data, {"cumulative_pair_count", *METRICS.values()}, str(path))
@@ -447,11 +447,11 @@ def save_report(args) -> None:
                 "source_csv": str(args.reference_performance_csv),
                 "experiment_id": args.reference_experiment_id,
                 "seed": args.reference_seed,
-                "method": "random",
+                "method": args.reference_method,
                 "round": args.reference_round,
                 "nominal_labeling_percent": 100,
                 "aggregation": "unweighted five-fold mean for each plot's metric; black dotted horizontal line without an SD band",
-                "interpretation": "observed random-method reference at nominal 100% budget; not an upper bound or proof of unique-image coverage",
+                "interpretation": "observed designated full-budget reference; not an upper bound or, from the legend alone, proof of unique-image coverage",
             }
             if not reference.empty
             else None
@@ -476,13 +476,21 @@ def parse_args(argv=None):
     parser.add_argument(
         "--reference-performance-csv",
         type=Path,
-        help="Optional saved random-method results at nominal 100%%; add black dotted reference lines.",
+        help="Optional full-budget reference CSV; add black dotted lines labeled all data.",
     )
     parser.add_argument(
         "--reference-experiment-id",
         default="pair_bald_all_folds_seed_240121",
     )
     parser.add_argument("--reference-seed", type=int, default=240121)
+    parser.add_argument(
+        "--reference-method", choices=["random", "all_data"], default="random"
+    )
+    parser.add_argument(
+        "--reference-round",
+        type=int,
+        help="Reference row's round; one-shot all_data defaults to 1, random defaults to the nominal 100%% round.",
+    )
     parser.add_argument("--initial-pairs-root", type=Path)
     parser.add_argument("--seed", type=int, default=240119)
     parser.add_argument("--max-round", type=int, default=8)
@@ -516,8 +524,15 @@ def parse_args(argv=None):
         parser.error(
             "Nominal labeling percentages must be positive, finite, and at most 100% at the final round."
         )
-    args.reference_round = None
-    if args.reference_performance_csv is not None:
+    if args.reference_round is not None and args.reference_round < 1:
+        parser.error("--reference-round must be positive.")
+    if (
+        args.reference_performance_csv is not None
+        and args.reference_round is None
+        and args.reference_method == "all_data"
+    ):
+        args.reference_round = 1
+    if args.reference_performance_csv is not None and args.reference_round is None:
         reference_round = (
             100 - args.initial_labeling_percent
         ) / args.round_labeling_percent

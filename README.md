@@ -772,8 +772,9 @@ uv run --frozen --no-sync 12_plot_pair_experiments.py \
 
 The `overall` line is the equally weighted mean of `all_accuracy` across the
 five reference folds; the `neighboring` line uses `neighbor_accuracy` instead.
-Both are converted to percentages. The legend states the reference seed and
-accuracy. The reference has no shaded band and is included in the y-axis limits
+Both are converted to percentages. The legend reads `all data`; the exact seed,
+method, round, and accuracies are retained in the reference CSVs and metadata.
+The reference has no shaded band and is included in the y-axis limits
 even if it lies above or below the displayed curves. Figure 6 is unchanged.
 This is an observed random-method reference at nominal 100%, **not a theoretical
 upper bound, an all-possible-pairs result, or proof that all training images
@@ -814,6 +815,176 @@ must have the same accuracy and grade counts; at later iterations they may
 differ. The plotter does not pool results from different seeds or experiments.
 Override `--performance-csv` or `--initial-performance-csv` if those tables are
 stored outside the default experiment directory.
+
+### One-shot random all-data control (N images, N comparisons)
+
+`13_make_all_data_pairs.py` creates a separate `all_data` control without
+running active learning. For each fold, all N training images are used exactly
+once as anchors; a partner is sampled uniformly from valid training images.
+Self-pairs and reverse duplicates are excluded. Partner repetitions across
+different comparisons are allowed: partners do not form a permutation. The
+result has exactly N unordered-distinct comparisons. Mayo labels are attached
+only after selection. At least three images are required. Tiny-pool dead ends
+restart the whole pass, with a maximum of 100 attempts; infeasible runs stop
+rather than duplicate pairs. Memory is linear in N, with expected linear
+sampling work; no N-by-N rankings or MC cache are generated.
+
+The following commands compare pair construction with the completed random
+round-16 experiment: they reuse its saved AL_0 checkpoint, fixed validation
+pairs, seed, training hyperparameters, and MC sample count. They do **not**
+change the learning rate to the paper's setting while changing the pairs.
+This is a controlled diagnostic, not a claim of exact reproduction of the
+paper's baseline. N one-shot pairs also need not equal the rounded AL budget
+(for example, N+6). Moreover, an AL_0 warm start has already used initial
+annotations that may be absent from the new N pairs; the unique annotation
+cost of the entire warm-start experiment is the union of these pair sets,
+not automatically N. Do not present this as a budget-matched AL comparison.
+
+#### 1. Set separate paths and generate all five folds
+
+Run on the GPU server from the scripts directory. These are new output names;
+existing AL_0 data and active-learning results are not overwritten. No shell
+script file is required.
+
+```bash
+cd /home/mil/n-inoue/Deep-Bayesian-Active-Learning-to-Rank/Experiments/Ranknet/Bayesian/LIMUC/Scripts
+
+export LIMUC_DATA_ROOT=/data/umeiro0/patient_based_classified_images
+SEED=240121
+SOURCE_EXPERIMENT_DIR=${LIMUC_DATA_ROOT}/generated/PairBALDExperiments/pair_bald_all_folds_seed_240121
+SOURCE_ROUND=16
+ALL_DATA_ID=all_data_one_shot_seed_240121
+ALL_DATA_DIR=${LIMUC_DATA_ROOT}/generated/PairBALDExperiments/${ALL_DATA_ID}
+
+uv run --frozen --no-sync 13_make_all_data_pairs.py \
+    --data-root "${LIMUC_DATA_ROOT}" \
+    --experiment-id "${ALL_DATA_ID}" \
+    --seed "${SEED}" --folds 1,2,3,4,5 --resume
+```
+
+The generator is CPU-only. The tables are under
+`rounds/all_data/seed_240121/round_1/fold_<fold>/`. Here `round_1` is a single
+full-budget run identifier, not AL's 25% point. `cumulative_pairs.csv` contains
+only the new N one-shot pairs; it does not append initial pairs.
+`pair_summary.csv` must report `cumulative_pair_count == unique_image_count == N`.
+`--resume` checks source and output hashes, skips matching completed folds, and
+rejects incomplete or modified outputs. It never silently repairs partial data.
+
+#### 2. Train, predict, and evaluate sequentially on one allocated GPU
+
+Stop other writers to these experiment directories first. Check `df -h` for
+sufficient free space for five training runs and `nvidia-smi` for a GPU allocated
+to you. Replace the prompted GPU value with its index or UUID. The source
+experiment must contain completed random round-16 training and prediction
+manifests for all five folds, plus their `experimental_condition.json` files.
+No new initial-model path is guessed: it is read from each source condition.
+If round 16 is not complete, explicitly set `SOURCE_ROUND=8` to reuse completed
+round-8 conditions instead; this does not create AL round 16. Check that those
+conditions are the ones intended for the comparison. There is no silent fallback.
+
+```bash
+nvidia-smi
+df -h "${ALL_DATA_DIR}"
+printf 'GPU index or UUID: '
+read -r GPU_ID
+
+uv run --frozen --no-sync - \
+    "${SOURCE_EXPERIMENT_DIR}" "${ALL_DATA_DIR}" "${GPU_ID}" "${SEED}" "${SOURCE_ROUND}" <<'PY'
+import json
+import runpy
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+source, baseline = map(Path, sys.argv[1:3])
+gpu, seed = sys.argv[3].strip(), int(sys.argv[4])
+source_round = int(sys.argv[5])
+if not gpu.strip():
+    raise ValueError("Specify an allocated GPU; CPU training is not allowed")
+runner = runpy.run_path("11_run_all_folds.py")
+resume_args = SimpleNamespace(experiment_dir=baseline, seed=seed, resume=True)
+inputs = {}
+for fold in range(1, 6):
+    previous = Path("random") / f"seed_{seed}" / f"round_{source_round}" / f"fold_{fold}"
+    train_dir = source / "training" / previous
+    pred_dir = source / "predictions" / previous
+    runner["require_completed"](train_dir, "training_manifest.json")
+    runner["require_completed"](pred_dir, "prediction_manifest.json")
+    condition = json.loads((train_dir / "experimental_condition.json").read_text())
+    prediction = json.loads((pred_dir / "prediction_manifest.json").read_text())
+    if (condition["method"], condition["fold"], condition["seed"], condition["round"]) != ("random", fold, seed, source_round):
+        raise ValueError(f"Unexpected source conditions for fold {fold}")
+    for key in ("initial_checkpoint", "valid_pair_csv"):
+        if not Path(condition[key]).is_file():
+            raise FileNotFoundError(condition[key])
+    run_path = Path("all_data") / f"seed_{seed}" / "round_1" / f"fold_{fold}"
+    runner["require_completed"](baseline / "rounds" / run_path, "selection_manifest.json")
+    inputs[fold] = (condition, prediction, run_path)
+
+def run(script, options):
+    runner["validate_resume"](resume_args, script, options)
+    command = [sys.executable, script]
+    for key, value in options.items():
+        command.extend(["--" + key, str(value)])
+    if script != "10_evaluate_pair_experiment.py":
+        command.append("--resume")
+    subprocess.run(command, check=True)
+
+for fold, (condition, prediction, run_path) in inputs.items():
+    identity = {"experiment-id": baseline.name, "method": "all_data", "seed": seed, "fold": fold, "round": 1}
+    pairs = baseline / "rounds" / run_path / "cumulative_pairs.csv"
+    run("8_train_pair_acquisition.py", {
+        **identity, "experiment-root": baseline.parent,
+        "train-pair-csv": pairs,
+        "valid-pair-csv": Path(condition["valid_pair_csv"]),
+        "initial-checkpoint": Path(condition["initial_checkpoint"]),
+        **{key.replace("_", "-"): condition[key] for key in ("batch_size", "epochs", "patience", "learning_rate")},
+        "cuda-visible-devices": gpu,
+    })
+    checkpoint = runner["best_checkpoint"](baseline / "training" / run_path / "weights")
+    run("9_predict_pair_experiment.py", {
+        "checkpoint": checkpoint, "output-dir": baseline / "predictions" / run_path,
+        "fold": fold, "seed": seed, "datatypes": "test",
+        "mc-samples": prediction["mc_samples"], "cuda-visible-devices": gpu,
+    })
+    run("10_evaluate_pair_experiment.py", {
+        **identity,
+        "prediction-summary-csv": baseline / "predictions" / run_path / "test_mean_score_and_uncertainty.csv",
+        "cumulative-pair-csv": pairs,
+        "output-csv": baseline / "fold_performance" / f"fold_{fold}.csv",
+    })
+runner["merge_performance"](baseline)
+print("All five all-data folds completed:", baseline / "performance.csv")
+PY
+```
+
+This runs existing scripts 8, 9, and 10 in the current uv environment. Training
+and prediction refuse to start without a GPU. Matching completed training and
+prediction stages are reused on another execution; evaluation is refreshed.
+An interrupted stage directory must be inspected before retrying: it is never
+deleted or overwritten automatically. Completion produces five `all_data`
+rows with `seed=240121` and `round=1` in the new `performance.csv`.
+
+#### 3. Plot the one-shot reference as the black dotted `all data` line
+
+```bash
+uv run --frozen --no-sync 12_plot_pair_experiments.py \
+    --data-root "${LIMUC_DATA_ROOT}" \
+    --experiment-dir "${SOURCE_EXPERIMENT_DIR}" \
+    --seed "${SEED}" --max-round 8 --bar-rounds 0,3,6,8 \
+    --reference-performance-csv "${ALL_DATA_DIR}/performance.csv" \
+    --reference-experiment-id "${ALL_DATA_ID}" \
+    --reference-seed "${SEED}" --reference-method all_data --reference-round 1 \
+    --output-dir "${SOURCE_EXPERIMENT_DIR}/plots_fig4_fig6_one_shot_v1"
+```
+
+The reference is now the five-fold mean of the one-shot control, **not** the
+old random round-16 result. Overall and neighboring use their own accuracies.
+Four method curves and Figure 6 remain unchanged. Choose a new output suffix
+if that report directory already exists. To draw the reference on another
+seed's curves, change only the curve experiment/seed and output directory;
+keep the reference identity pointing to the one-shot experiment.
 
 ## Citation
 
