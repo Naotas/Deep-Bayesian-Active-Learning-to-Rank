@@ -131,7 +131,7 @@ def load_previous_set(
     datatype,
     selection,
 ):
-    # AL_1 starts from the AL_0 random 20% image set.
+    # AL_1 starts from the saved AL_0 random image set.
     if iteration == 1:
         path = os.path.join(
             root,

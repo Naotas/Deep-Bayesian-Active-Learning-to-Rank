@@ -1,5 +1,6 @@
 import argparse
 import copy
+import math
 import os
 import random
 from pathlib import Path
@@ -14,7 +15,7 @@ from data_paths import add_data_root_argument, generated_path
 # 1. Read the train / valid image lists from:
 #      <data-root>/generated/training_dataset/
 #
-# 2. Randomly select 20% of images from each split.
+# 2. Randomly select the configured fraction of images from each split.
 #
 # 3. Create one random non-self pair for each selected image.
 #
@@ -34,7 +35,7 @@ from data_paths import add_data_root_argument, generated_path
 # In this implementation, AL_0 uses random sampling (RBS).
 #
 # Example:
-#   python 1_initial_learning_make_pair.py
+#   uv run 1_initial_learning_make_pair.py --initial-rate 0.10 --al-id LIMUC_AL_10pct
 # ============================================================
 
 SEED = 220428
@@ -58,9 +59,9 @@ def make_derangement(n, rng):
             return np.asarray(paired, dtype=int)
 
 
-def select_initial_images(data, foldnum, datatype):
-    """Randomly select 20% of images from one split."""
-    select_num = round(len(data) * INITIAL_RATE)
+def select_initial_images(data, foldnum, datatype, initial_rate=INITIAL_RATE):
+    """Randomly select the configured share of images from one split."""
+    select_num = round(len(data) * initial_rate)
     select_num = max(2, select_num)
     select_num = min(select_num, len(data))
 
@@ -135,11 +136,25 @@ def main():
         help=f"Active Learning experiment ID. Default: {AL_ID}",
     )
     parser.add_argument(
+        "--initial-rate",
+        type=float,
+        default=INITIAL_RATE,
+        help="Fraction sampled from each training and validation split. Default: 0.20",
+    )
+    parser.add_argument(
         "--folds",
         default="1,2,3,4,5",
         help="Comma-separated folds. Default: 1,2,3,4,5",
     )
     args = parser.parse_args()
+    if not math.isfinite(args.initial_rate) or not 0 < args.initial_rate <= 1:
+        parser.error("--initial-rate must be greater than zero and at most one.")
+    if (
+        not args.al_id
+        or Path(args.al_id).name != args.al_id
+        or args.al_id in {".", ".."}
+    ):
+        parser.error("--al-id must be one directory name.")
 
     dataset_path = (
         args.training_dataset_dir.expanduser()
@@ -152,6 +167,16 @@ def main():
         else generated_path(args.data_root, "Add_dataset")
     )
     folds = [int(value.strip()) for value in args.folds.split(",") if value.strip()]
+    if not folds or any(fold not in range(1, 6) for fold in folds):
+        parser.error("--folds must contain fold numbers from 1 to 5.")
+    if len(folds) != len(set(folds)):
+        parser.error("--folds must not contain duplicates.")
+    for foldnum in folds:
+        output_dir = (
+            add_dataset_root / args.al_id / "AL_0" / f"fold_{foldnum}" / SELECTION
+        )
+        if output_dir.exists():
+            raise FileExistsError(f"Initial pair output already exists: {output_dir}")
 
     for foldnum in folds:
         print()
@@ -175,7 +200,10 @@ def main():
                 )
 
             selected = select_initial_images(
-                data=data, foldnum=foldnum, datatype=datatype
+                data=data,
+                foldnum=foldnum,
+                datatype=datatype,
+                initial_rate=args.initial_rate,
             )
 
             pair_df = make_pair(selected=selected, foldnum=foldnum, datatype=datatype)

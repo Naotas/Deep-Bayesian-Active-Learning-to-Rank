@@ -456,6 +456,82 @@ Selection, training, and prediction refuse to overwrite existing destinations. A
 incomplete directory is rejected so a restart cannot silently double-count pairs or
 budget; correct the partial destination explicitly before retrying.
 
+### Start a separate experiment at 10% and acquire through 50%
+
+The existing AL_0 checkpoint was trained on 20% of each split, so a 10% run
+needs new initial pairs and new initial weights. The initial pair generator now
+accepts `--initial-rate`; the initial trainer checks its input pair counts and
+records the actual configured rate. Keep a new `--al-id`, results root, and
+experiment ID so the earlier 20% run remains intact. The commands below sample
+10% of both training and validation images in each fold, train all five initial
+models, then acquire 5% of each fold's training images per round for eight
+rounds. This reaches a **nominal** 50% budget (`10 + 8 × 5`). Integer rounding
+can make actual counts differ slightly, and comparison partners can appear in
+the pairs before being selected as anchors.
+
+Run these commands on the GPU server from the scripts directory. Use a GPU
+assigned to you. The initial trainer prints the exact result directory after
+training; copy that path into `INITIAL_MODEL_ROOT` before running script 11.
+
+```bash
+cd /home/mil/n-inoue/Deep-Bayesian-Active-Learning-to-Rank/Experiments/Ranknet/Bayesian/LIMUC/Scripts
+
+export LIMUC_DATA_ROOT=/data/umeiro0/patient_based_classified_images
+AL_ID=LIMUC_AL_10pct
+INITIAL_RESULTS_ROOT=${LIMUC_DATA_ROOT}/generated/Results_AL0_10pct
+INITIAL_PAIRS_ROOT=${LIMUC_DATA_ROOT}/generated/Add_dataset/${AL_ID}/AL_0
+EXPERIMENT_ID=pair_bald_10_to_50_seed_240122
+SEED=240122
+GPU_LIST=0
+
+uv run --frozen --no-sync 1_initial_learning_make_pair.py \
+    --data-root "${LIMUC_DATA_ROOT}" \
+    --al-id "${AL_ID}" --initial-rate 0.10 --folds 1,2,3,4,5
+
+df -h "${LIMUC_DATA_ROOT}"
+nvidia-smi
+uv run --frozen --no-sync 2_train_bayesian_ranknet.py \
+    --data-root "${LIMUC_DATA_ROOT}" \
+    --al-id "${AL_ID}" --initial-rate 0.10 --folds 1,2,3,4,5 \
+    --results-root "${INITIAL_RESULTS_ROOT}" \
+    --cuda-visible-devices "${GPU_LIST}"
+```
+
+After initial training, set the printed directory containing `fold_1/weights`
+through `fold_5/weights` and check the paths before starting acquisition:
+
+```bash
+INITIAL_MODEL_ROOT=/absolute/path/printed/by/initial/training
+
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --data-root "${LIMUC_DATA_ROOT}" \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --initial-rate 0.10 --anchor-rate 0.05 \
+    --gpus "${GPU_LIST}" --folds 1,2,3,4,5 \
+    --methods original,random,predictive_entropy,pair_bald \
+    --seed "${SEED}" --rounds 8 --dry-run
+
+uv run --frozen --no-sync 11_run_all_folds.py \
+    --data-root "${LIMUC_DATA_ROOT}" \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --initial-model-root "${INITIAL_MODEL_ROOT}" \
+    --initial-pairs-root "${INITIAL_PAIRS_ROOT}" \
+    --initial-rate 0.10 --anchor-rate 0.05 \
+    --gpus "${GPU_LIST}" --folds 1,2,3,4,5 \
+    --methods original,random,predictive_entropy,pair_bald \
+    --seed "${SEED}" --rounds 8 --resume
+```
+
+The dry run checks that the initial pair files, checkpoint conditions, and
+training split sizes agree with 10%; it performs no GPU work. The production
+run writes to `generated/PairBALDExperiments/${EXPERIMENT_ID}`. On a later
+invocation, keep the same arguments and `--resume`; completed stages are
+reused. To plot this experiment, provide its initial test evaluation data to
+script 12 and set `--initial-labeling-percent 10 --round-labeling-percent 5
+--max-round 8`. Its round-8 point is the nominal 50% point.
+
 ### Run all five folds together
 
 After completing initial learning for folds 1–5, use `11_run_all_folds.py` to

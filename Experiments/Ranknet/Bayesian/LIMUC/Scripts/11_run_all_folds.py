@@ -101,6 +101,8 @@ def initial_inputs(args):
         for name, path in inputs[fold].items():
             if not path.is_file():
                 raise FileNotFoundError(f"Fold {fold} {name} not found: {path}")
+        if args.initial_rate is not None:
+            validate_initial_rate(args, fold, pair_dir, checkpoints[fold])
         if args.initial_uncertainty_root is not None:
             uncertainty = (
                 args.initial_uncertainty_root
@@ -121,6 +123,43 @@ def initial_inputs(args):
                 / "train_mean_score_and_uncertainty.csv"
             )
     return inputs
+
+
+def validate_initial_rate(args, fold, pair_dir, checkpoint):
+    """Check that saved initial pairs and model match the declared split rate."""
+    for datatype in ("train", "valid"):
+        split_csv = generated_path(
+            args.data_root, "training_dataset", f"{fold}_{datatype}.csv"
+        )
+        full_count = len(pd.read_csv(split_csv, usecols=["filename"]))
+        expected = min(full_count, max(2, round(full_count * args.initial_rate)))
+        selected_csv = pair_dir / f"{fold}_{datatype}_RBS.csv"
+        pair_csv = pair_dir / f"{fold}_{datatype}_pair_RBS.csv"
+        selected_count = len(pd.read_csv(selected_csv, usecols=["filename"]))
+        pair_count = len(pd.read_csv(pair_csv, usecols=["x1_image"]))
+        if selected_count != expected or pair_count != expected:
+            raise ValueError(
+                f"Fold {fold} {datatype} initial selection has {selected_count} "
+                f"images and {pair_count} pairs; --initial-rate {args.initial_rate} "
+                f"requires {expected} of {full_count}."
+            )
+
+    condition_path = checkpoint.parent.parent / "experimental_condition.csv"
+    if not condition_path.is_file():
+        raise FileNotFoundError(
+            f"Initial model rate record not found: {condition_path}"
+        )
+    condition = pd.read_csv(condition_path)
+    if "initial_rate" not in condition or len(condition) != 1:
+        raise ValueError(f"Initial model rate is unavailable: {condition_path}")
+    saved_rate = float(condition.loc[0, "initial_rate"])
+    if not math.isfinite(saved_rate) or not math.isclose(
+        saved_rate, args.initial_rate, rel_tol=0, abs_tol=1e-12
+    ):
+        raise ValueError(
+            f"Fold {fold} checkpoint records initial_rate={saved_rate}, "
+            f"but --initial-rate={args.initial_rate}."
+        )
 
 
 def round_directory(args, category, method, fold, round_number):
@@ -549,6 +588,11 @@ def parse_args(argv=None):
     initial.add_argument("--initial-model-root", type=Path)
     initial.add_argument("--initial-checkpoints-csv", type=Path)
     parser.add_argument("--initial-pairs-root", type=Path)
+    parser.add_argument(
+        "--initial-rate",
+        type=float,
+        help="Validate the saved AL_0 model and pairs against this split fraction.",
+    )
     parser.add_argument("--initial-uncertainty-root", type=Path)
     parser.add_argument("--experiment-root", type=Path)
     parser.add_argument(
@@ -598,6 +642,10 @@ def parse_args(argv=None):
         parser.error("Require 1 <= --start-round <= --rounds.")
     if not 0 < args.anchor_rate <= 1 or args.partner_cap < 0 or args.patience < 0:
         parser.error("Invalid acquisition rate, partner cap, or patience.")
+    if args.initial_rate is not None and (
+        not math.isfinite(args.initial_rate) or not 0 < args.initial_rate <= 1
+    ):
+        parser.error("--initial-rate must be greater than zero and at most one.")
     for name in (
         "mc_samples",
         "image_batch_size",

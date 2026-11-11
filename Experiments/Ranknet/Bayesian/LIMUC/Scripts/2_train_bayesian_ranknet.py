@@ -27,8 +27,7 @@ from keras.optimizers import Adam
 # 1. Read the train / valid pair datasets created by:
 #      1_initial_learning_make_pair.py
 #
-# 2. Train Bayesian RankNet using the initial randomly sampled
-#    20% dataset.
+# 2. Train Bayesian RankNet using the configured initial sample.
 #
 # 3. Keep dropout active in the ranking model for
 #    Monte Carlo Dropout-based uncertainty estimation.
@@ -55,8 +54,7 @@ from keras.optimizers import Adam
 #       history.csv
 #       experimental_condition.csv
 #
-# In this implementation, AL_0 is trained using the
-# initial randomly sampled 20% dataset.
+# The initial sampling fraction defaults to 20%.
 #
 # Example:
 #   python 2_train_bayesian_ranknet.py
@@ -111,7 +109,7 @@ class BatchGenerator(keras.utils.Sequence):
 
     def on_epoch_end(self):
         self.indexes = np.arange(self.length)
-        if self.shuffle == True:
+        if self.shuffle:
             np.random.shuffle(self.indexes)
 
 
@@ -153,6 +151,17 @@ def prepare_dataset():
         raise ValueError(f"{train_csv} is missing columns: {sorted(missing_train)}")
     if missing_valid:
         raise ValueError(f"{valid_csv} is missing columns: {sorted(missing_valid)}")
+
+    for datatype, pairs in (("train", data_train), ("valid", data_valid)):
+        split_path = training_dataset_dir / f"{fold}_{datatype}.csv"
+        split = pd.read_csv(split_path, usecols=["filename"])
+        expected = min(len(split), max(2, round(len(split) * cli_args.initial_rate)))
+        if len(pairs) != expected:
+            raise ValueError(
+                f"{datatype} AL_0 pair count is {len(pairs)}, but "
+                f"--initial-rate {cli_args.initial_rate} requires {expected} "
+                f"for {split_path}. Check --al-id and --initial-rate."
+            )
 
     x1_train = np.array(data_train["x1_image"].astype(str))
     x2_train = np.array(data_train["x2_image"].astype(str))
@@ -257,7 +266,7 @@ def save_condition(x1_train, x1_valid):
         "al_id": al_id,
         "iteration": 0,
         "selection": selection,
-        "initial_rate": 0.20,
+        "initial_rate": cli_args.initial_rate,
         "train_num": len(x1_train),
         "valid_num": len(x1_valid),
         "image_shape": image_shape,
@@ -276,9 +285,14 @@ def save_condition(x1_train, x1_valid):
 # learning
 def learning():
     # prepare train and valid datasets
-    x1_train, x2_train, rel_label_train, x1_valid, x2_valid, rel_label_valid = (
-        prepare_dataset()
-    )
+    (
+        x1_train,
+        x2_train,
+        rel_label_train,
+        x1_valid,
+        x2_valid,
+        rel_label_valid,
+    ) = prepare_dataset()
 
     # model
     model = ranknet()
@@ -318,13 +332,19 @@ def learning():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train the initial Bayesian RankNet on the AL_0 20% pair dataset."
+        description="Train the initial Bayesian RankNet on an AL_0 pair dataset."
     )
     add_data_root_argument(parser)
     parser.add_argument(
         "--al-id",
         default="LIMUC_AL_001",
         help="Active Learning experiment ID. Default: LIMUC_AL_001",
+    )
+    parser.add_argument(
+        "--initial-rate",
+        type=float,
+        default=0.20,
+        help="Initial split fraction used by script 1. Default: 0.20",
     )
     parser.add_argument(
         "--selection",
@@ -353,8 +373,22 @@ if __name__ == "__main__":
         default=None,
         help="JPEG directory. Default: <data-root>/generated/all_public_UC_images",
     )
+    parser.add_argument(
+        "--training-dataset-dir",
+        type=Path,
+        default=None,
+        help="Full split CSVs. Default: <data-root>/generated/training_dataset",
+    )
     parser.add_argument("--cuda-visible-devices", default="1")
     cli_args = parser.parse_args()
+    if not math.isfinite(cli_args.initial_rate) or not 0 < cli_args.initial_rate <= 1:
+        parser.error("--initial-rate must be greater than zero and at most one.")
+    if (
+        not cli_args.al_id
+        or Path(cli_args.al_id).name != cli_args.al_id
+        or cli_args.al_id in {".", ".."}
+    ):
+        parser.error("--al-id must be one directory name.")
 
     dataset_name = "LIMUC"
     al_id = cli_args.al_id
@@ -374,11 +408,20 @@ if __name__ == "__main__":
         if cli_args.image_dir is not None
         else generated_path(cli_args.data_root, "all_public_UC_images")
     )
+    training_dataset_dir = (
+        cli_args.training_dataset_dir.expanduser()
+        if cli_args.training_dataset_dir is not None
+        else generated_path(cli_args.data_root, "training_dataset")
+    )
 
     # experimental_condition
     now = datetime.now().astimezone()
     # Make the result directory clearly identifiable as the initial AL model.
     date = now.strftime("%Y%m%d_%H%M%S") + "_AL_0"
+    if (results_root / date).exists():
+        raise FileExistsError(
+            f"Initial training output already exists: {results_root / date}"
+        )
 
     method_type = "RankNet"
     backbone_type = "DenseNet169"
@@ -399,6 +442,10 @@ if __name__ == "__main__":
     os.environ["TF_DETERMINISTIC_OPS"] = "1"
     os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
     os.environ["CUDA_VISIBLE_DEVICES"] = cli_args.cuda_visible_devices
+    if not tf.config.list_physical_devices("GPU"):
+        raise RuntimeError(
+            "TensorFlow cannot see a GPU. Initial training was not started."
+        )
 
     for fold in fold_lst:
         print()

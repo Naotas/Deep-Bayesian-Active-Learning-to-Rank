@@ -353,7 +353,7 @@ def save_condition(
         "al_id": al_id,
         "iteration": iteration,
         "selection": ("RBS" if iteration == 0 else selection),
-        "initial_rate": 0.20,
+        "initial_rate": args.initial_rate,
         "add_rate_per_iteration": 0.05,
         "initial_result_date": initial_result_date,
         "loaded_initial_weight": loaded_weight,
@@ -396,7 +396,7 @@ def learning():
     loaded_weight = None
 
     # Cumulative AL training:
-    # AL_1 to AL_6 always start from the fixed AL_0 model.
+    # Later rounds always start from the fixed AL_0 model.
     if iteration >= 1:
         loaded_weight = find_al0_initial_weight()
         model.load_weights(loaded_weight)
@@ -445,9 +445,7 @@ def learning():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description=(
-            "Train Bayesian RankNet with cumulative Active Learning (AL_0 to AL_6)."
-        )
+        description="Train Bayesian RankNet with cumulative Active Learning."
     )
     add_data_root_argument(parser)
 
@@ -456,10 +454,16 @@ if __name__ == "__main__":
         default="LIMUC_AL_001",
     )
     parser.add_argument(
+        "--initial-rate",
+        type=float,
+        default=0.20,
+        help="Initial split fraction used to create AL_0. Default: 0.20",
+    )
+    parser.add_argument(
         "--iteration",
         type=int,
         required=True,
-        help="AL iteration: 0, 1, ..., 6",
+        help="Nonnegative AL iteration number.",
     )
     parser.add_argument(
         "--initial-result-date",
@@ -518,9 +522,11 @@ if __name__ == "__main__":
 
     if args.iteration < 0:
         raise ValueError("--iteration must be >= 0.")
+    if not math.isfinite(args.initial_rate) or not 0 < args.initial_rate <= 1:
+        raise ValueError("--initial-rate must be greater than zero and at most one.")
 
     if args.iteration >= 1 and args.initial_result_date is None:
-        raise ValueError("--initial-result-date is required for AL_1 to AL_6.")
+        raise ValueError("--initial-result-date is required for AL_1 and later.")
 
     if args.iteration >= 1 and "_AL_0" not in args.initial_result_date:
         raise ValueError(
