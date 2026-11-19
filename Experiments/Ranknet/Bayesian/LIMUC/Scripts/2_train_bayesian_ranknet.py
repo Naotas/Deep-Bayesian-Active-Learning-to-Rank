@@ -20,6 +20,7 @@ from keras.layers import Input
 from keras.layers.core import Dense, Dropout
 from keras.models import Model
 from keras.optimizers import Adam
+from limuc_training_settings import PAPER_LIMUC_LEARNING_RATE
 
 # ============================================================
 # Train the initial Bayesian RankNet model (AL_0)
@@ -380,9 +381,17 @@ if __name__ == "__main__":
         help="Full split CSVs. Default: <data-root>/generated/training_dataset",
     )
     parser.add_argument("--cuda-visible-devices", default="1")
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=PAPER_LIMUC_LEARNING_RATE,
+        help="Adam learning rate for LIMUC. Default: 2e-5",
+    )
     cli_args = parser.parse_args()
     if not math.isfinite(cli_args.initial_rate) or not 0 < cli_args.initial_rate <= 1:
         parser.error("--initial-rate must be greater than zero and at most one.")
+    if not math.isfinite(cli_args.learning_rate) or cli_args.learning_rate <= 0:
+        parser.error("--learning-rate must be positive and finite.")
     if (
         not cli_args.al_id
         or Path(cli_args.al_id).name != cli_args.al_id
@@ -429,7 +438,7 @@ if __name__ == "__main__":
     batch_size = 32
     epoch_num = 300
     es_patience = 20
-    learning_rate = 5e-5
+    learning_rate = cli_args.learning_rate
     dropout_rate = 0.2
     weight_decay = 1e-4
 

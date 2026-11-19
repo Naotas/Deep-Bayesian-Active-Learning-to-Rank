@@ -259,6 +259,16 @@ directory. No current-working-directory-dependent data path is used.
 
 In the experiments reported in the paper, the number of active-learning iterations was set to `K = 6`.
 
+For the public LIMUC experiment, scripts 2 and 6 default to the paper's Adam
+initial learning rate of `2e-5` (Section 5.1.3). Both accept `--learning-rate`
+when a different value is intentionally needed. Script 6 checks the rate saved
+in each fold's AL_0 `experimental_condition.csv` before training. To reproduce
+the paper-rate run, train a new AL_0 with script 2, keep its result directory
+separate from earlier runs, and use that new AL_0 directory for every script 6
+iteration. An existing AL_0 checkpoint trained at `5e-5` cannot become a
+paper-rate checkpoint by changing only script 6. Existing AL_0 pair CSVs may be
+reused when the image selection and pair budget are unchanged.
+
 ## Pair-BALD comparison-partner experiments
 
 The additional pipeline keeps the existing image-level UBS selection and compares

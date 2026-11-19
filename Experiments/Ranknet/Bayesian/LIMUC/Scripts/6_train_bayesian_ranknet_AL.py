@@ -20,6 +20,10 @@ from keras.layers import Input
 from keras.layers.core import Dense, Dropout
 from keras.models import Model
 from keras.optimizers import Adam
+from limuc_training_settings import (
+    PAPER_LIMUC_LEARNING_RATE,
+    validate_initial_learning_rate,
+)
 
 # ============================================================
 # Bayesian RankNet training for cumulative Active Learning
@@ -301,6 +305,14 @@ def find_al0_initial_weight():
     weight_files.sort()
     best_path = weight_files[-1]
 
+    condition_path = Path(
+        results_root,
+        initial_result_date,
+        f"fold_{fold}",
+        "experimental_condition.csv",
+    )
+    validate_initial_learning_rate(condition_path, learning_rate)
+
     print(f"  AL_0 initialization weight : {best_path}")
 
     return best_path
@@ -381,7 +393,7 @@ def save_condition(
     )
 
 
-def learning():
+def learning(initial_weight):
     (
         x1_train,
         x2_train,
@@ -393,20 +405,17 @@ def learning():
 
     model = ranknet()
 
-    loaded_weight = None
-
     # Cumulative AL training:
     # Later rounds always start from the fixed AL_0 model.
     if iteration >= 1:
-        loaded_weight = find_al0_initial_weight()
-        model.load_weights(loaded_weight)
+        model.load_weights(initial_weight)
 
     callbacks = set_callbacks()
 
     save_condition(
         x1_train,
         x1_valid,
-        loaded_weight,
+        initial_weight,
     )
 
     train_gen = BatchGenerator(
@@ -505,7 +514,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=5e-5,
+        default=PAPER_LIMUC_LEARNING_RATE,
     )
     parser.add_argument(
         "--epochs",
@@ -524,6 +533,8 @@ if __name__ == "__main__":
         raise ValueError("--iteration must be >= 0.")
     if not math.isfinite(args.initial_rate) or not 0 < args.initial_rate <= 1:
         raise ValueError("--initial-rate must be greater than zero and at most one.")
+    if not math.isfinite(args.learning_rate) or args.learning_rate <= 0:
+        parser.error("--learning-rate must be positive and finite.")
 
     if args.iteration >= 1 and args.initial_result_date is None:
         raise ValueError("--initial-result-date is required for AL_1 and later.")
@@ -610,6 +621,8 @@ if __name__ == "__main__":
         )
         tf.compat.v1.keras.backend.set_session(sess)
 
+        initial_weight = find_al0_initial_weight() if iteration >= 1 else None
+
         result_path = os.path.join(
             results_root,
             date,
@@ -617,7 +630,7 @@ if __name__ == "__main__":
         )
         os.makedirs(result_path, exist_ok=True)
 
-        learning()
+        learning(initial_weight)
 
     print()
     print(f"Finished AL_{iteration} training.")
